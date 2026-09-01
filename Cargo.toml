@@ -1,0 +1,31 @@
+[package]
+name = "xedis-tui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Xedis Team"]
+description = "Modern Terminal UI for Redis and compatible protocols"
+
+[dependencies]
+# TUI & Terminal Handling
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+unicode-width = "0.2"
+
+# Async Runtime
+tokio = { version = "1.43", features = ["full"] }
+futures-util = "0.3"
+
+# Redis RESP Client
+redis = { version = "0.27", features = ["tokio-comp", "cluster-async", "aio"] }
+
+# CLI Arguments & Config
+clap = { version = "4.5", features = ["derive", "cargo"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+dirs = "6.0"
+
+# Error Handling & Utilities
+anyhow = "1.0"
+thiserror = "2.0"
+chrono = "0.4"
