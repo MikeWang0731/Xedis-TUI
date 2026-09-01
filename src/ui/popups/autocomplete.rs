@@ -189,26 +189,35 @@ impl AutocompletePopup {
             // Syntax Line
             if !selected_item.syntax.is_empty() {
                 doc_lines.push(Line::from(vec![
-                    Span::styled("Syntax: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Syntax: ", Style::default().fg(Color::Rgb(160, 175, 190))),
                     Span::styled(&selected_item.syntax, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 ]));
             }
 
             // Description Line (with auto wrap)
             if !selected_item.description.is_empty() {
-                doc_lines.push(Line::from(vec![
-                    Span::styled("Desc:   ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(&selected_item.description, Style::default().fg(Color::White)),
-                ]));
+                if let Some(rest) = selected_item.description.strip_prefix("[!]") {
+                    doc_lines.push(Line::from(vec![
+                        Span::styled("Desc:   ", Style::default().fg(Color::Rgb(160, 175, 190))),
+                        Span::styled("[!] ", Style::default().fg(Color::Rgb(255, 100, 100)).add_modifier(Modifier::BOLD)),
+                        Span::styled(rest.trim_start(), Style::default().fg(Color::White)),
+                    ]));
+                } else {
+                    doc_lines.push(Line::from(vec![
+                        Span::styled("Desc:   ", Style::default().fg(Color::Rgb(160, 175, 190))),
+                        Span::styled(&selected_item.description, Style::default().fg(Color::White)),
+                    ]));
+                }
             }
 
             // Example Line
             if !selected_item.example.is_empty() {
                 doc_lines.push(Line::from(vec![
-                    Span::styled("Usage:  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Usage:  ", Style::default().fg(Color::Rgb(160, 175, 190))),
                     Span::styled(&selected_item.example, Style::default().fg(Color::Yellow)),
                 ]));
             }
+
 
             let doc_paragraph = Paragraph::new(doc_lines)
                 .wrap(Wrap { trim: true });

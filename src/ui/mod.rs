@@ -8,7 +8,7 @@ pub mod telemetry_view;
 use crate::app::{ActiveRightTab, App, FocusedPane};
 use crate::ui::cluster_view::ClusterView;
 use crate::ui::layout::MainLayout;
-use crate::ui::popups::AutocompletePopup;
+use crate::ui::popups::{AutocompletePopup, GuardPopup, HelpPopup};
 use crate::ui::slowlog_view::SlowlogView;
 use crate::ui::stream_view::StreamView;
 use crate::ui::telemetry_view::TelemetryView;
@@ -27,7 +27,8 @@ pub fn render(f: &mut Frame, app: &App) {
     // 1. Render Top Header Bar
     render_header(f, main_layout.header, app);
 
-    // 2. Render Left Pane (Command Stream + Input) with Dimming Support when autocomplete active
+    // 2. Render Left Pane (Command Stream + Input) with Dimming Support when autocomplete or modal is active
+    let is_dimmed = app.autocomplete_active || app.pending_guard.is_some() || app.help_active;
     StreamView::render(
         f,
         main_layout.left_pane,
@@ -35,8 +36,8 @@ pub fn render(f: &mut Frame, app: &App) {
         &app.input_buffer,
         app.cursor_pos,
         app.scroll_offset,
-        app.focused_pane == FocusedPane::LeftStream,
-        app.autocomplete_active,
+        app.focused_pane == FocusedPane::LeftStream && !is_dimmed,
+        is_dimmed,
     );
 
     // 3. Render Right Pane (if not Zen mode)
@@ -56,6 +57,16 @@ pub fn render(f: &mut Frame, app: &App) {
             height: 3,
         };
         AutocompletePopup::render(f, input_area, &app.autocomplete_items, app.autocomplete_idx);
+    }
+
+    // 6. Render Help Modal (F1 Handbook)
+    if app.help_active {
+        HelpPopup::render(f, size, app.help_tab, app.help_scroll_offset);
+    }
+
+    // 7. Render Safety Guard Interceptor Modal (Highest priority overlay)
+    if let Some((_, assessment)) = &app.pending_guard {
+        GuardPopup::render(f, size, assessment);
     }
 }
 
@@ -255,10 +266,12 @@ fn render_right_pane(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_footer(f: &mut Frame, area: Rect, _app: &App) {
     let w = area.width;
-    let shortcuts = if w >= 85 {
+    let shortcuts = if w >= 95 {
         Line::from(vec![
             Span::styled(" [Tab] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
-            Span::styled("Switch Focus ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Focus ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" [F1] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Yellow)),
+            Span::styled("Handbook ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [F5] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
             Span::styled("Layout ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [F2~F4/1~3] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
@@ -266,9 +279,9 @@ fn render_footer(f: &mut Frame, area: Rect, _app: &App) {
             Span::styled(" [/] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Yellow)),
             Span::styled("Macros ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [@] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Rgb(180, 160, 255))),
-            Span::styled("Route Node ", Style::default().fg(Color::DarkGray)),
-            Span::styled(" [Up/Dn/Left/Right] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
-            Span::styled("Nav/Scroll ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Route ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" [Up/Dn] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
+            Span::styled("Nav ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [Ctrl+C] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Red)),
             Span::styled("Quit", Style::default().fg(Color::DarkGray)),
         ])
@@ -276,12 +289,13 @@ fn render_footer(f: &mut Frame, area: Rect, _app: &App) {
         Line::from(vec![
             Span::styled(" [Tab] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
             Span::styled("Focus ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" [F1] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Yellow)),
+            Span::styled("Help ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [F5] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
             Span::styled("Layout ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [F2-F4] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Cyan)),
             Span::styled("Tabs ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [/] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Yellow)),
-            Span::styled("Macros ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [Ctrl+C] ", Style::default().bg(Color::Rgb(30, 40, 60)).fg(Color::Red)),
             Span::styled("Quit", Style::default().fg(Color::DarkGray)),
         ])

@@ -110,3 +110,31 @@ fn test_info_persistence_subcommand_autocomplete() {
     assert_eq!(suggestions4.len(), 1);
     assert_eq!(suggestions4[0].completion_text, "nodes ");
 }
+
+#[test]
+fn test_dangerous_and_extended_command_autocomplete() {
+    let nodes = mock_nodes();
+
+    // 1. "KEY" -> KEYS
+    let (s_keys, _) = AutocompleteEngine::get_suggestions("KEY", 3, &nodes);
+    let names: Vec<&str> = s_keys.iter().map(|s| s.completion_text.trim()).collect();
+    assert!(names.contains(&"KEYS"));
+
+    // 2. "FLUSH" -> FLUSHALL, FLUSHDB
+    let (s_flush, _) = AutocompleteEngine::get_suggestions("FLUSH", 5, &nodes);
+    let f_names: Vec<&str> = s_flush.iter().map(|s| s.completion_text.trim()).collect();
+    assert!(f_names.contains(&"FLUSHALL"));
+    assert!(f_names.contains(&"FLUSHDB"));
+
+    // 3. "SHUT" -> SHUTDOWN
+    let (s_shut, _) = AutocompleteEngine::get_suggestions("SHUT", 4, &nodes);
+    let shut_names: Vec<&str> = s_shut.iter().map(|s| s.completion_text.trim()).collect();
+    assert!(shut_names.contains(&"SHUTDOWN"));
+
+    // 4. "FLUSHALL " -> ASYNC, SYNC subcommands
+    let (s_flush_sub, _) = AutocompleteEngine::get_suggestions("FLUSHALL ", 9, &nodes);
+    let sub_names: Vec<&str> = s_flush_sub.iter().map(|s| s.completion_text.trim()).collect();
+    assert!(sub_names.contains(&"async"));
+    assert!(sub_names.contains(&"sync"));
+}
+

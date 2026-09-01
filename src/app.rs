@@ -1,9 +1,10 @@
 use crate::backend::XedisClient;
 use crate::config::{AppConfig, LayoutPreset};
 use crate::core::autocomplete::{AutocompleteEngine, SuggestionItem};
+use crate::core::guard::{DangerAssessment, SafetyGuard};
 use crate::core::history::HistoryManager;
 use crate::core::macro_engine::MacroEngine;
-use crate::core::router::{CommandRouter, CommandType};
+use crate::core::router::{CommandRouter, CommandType, ParsedCommand};
 use crate::ui::stream_view::{ExecutionRecord, StreamView};
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -44,6 +45,10 @@ pub struct App {
     pub autocomplete_idx: usize,
     pub autocomplete_active: bool,
     pub autocomplete_replace_range: (usize, usize),
+    pub pending_guard: Option<(ParsedCommand, DangerAssessment)>,
+    pub help_active: bool,
+    pub help_tab: usize,
+    pub help_scroll_offset: usize,
 }
 
 impl App {
@@ -81,6 +86,10 @@ impl App {
             autocomplete_idx: 0,
             autocomplete_active: false,
             autocomplete_replace_range: (0, 0),
+            pending_guard: None,
+            help_active: false,
+            help_tab: 0,
+            help_scroll_offset: 0,
         }
     }
 
@@ -127,10 +136,11 @@ impl App {
     }
 
     pub fn scroll_stream_up(&mut self, delta: usize) {
-        let total = StreamView::total_lines_count(&self.records);
+        let total = StreamView::total_lines_count(&self.records, 80);
         let max_scroll = total.saturating_sub(1);
         self.scroll_offset = (self.scroll_offset + delta).min(max_scroll);
     }
+
 
     pub fn scroll_stream_down(&mut self, delta: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(delta);
@@ -155,6 +165,84 @@ impl App {
     }
 
     pub async fn handle_key(&mut self, key: KeyEvent) {
+        // 0. Safety Guard Modal Interception (Top Priority)
+        if self.pending_guard.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some((parsed, _)) = self.pending_guard.take() {
+                        self.execute_parsed_command(parsed).await;
+                    }
+                    return;
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.pending_guard = None;
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        // 0.1 Help Modal Interception
+        if self.help_active {
+            match key.code {
+                KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    self.help_active = false;
+                    return;
+                }
+                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                    self.help_tab = (self.help_tab + 1) % 4;
+                    self.help_scroll_offset = 0;
+                    return;
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    self.help_tab = if self.help_tab == 0 { 3 } else { self.help_tab - 1 };
+                    self.help_scroll_offset = 0;
+                    return;
+                }
+                KeyCode::Char('1') => {
+                    self.help_tab = 0;
+                    self.help_scroll_offset = 0;
+                    return;
+                }
+                KeyCode::Char('2') => {
+                    self.help_tab = 1;
+                    self.help_scroll_offset = 0;
+                    return;
+                }
+                KeyCode::Char('3') => {
+                    self.help_tab = 2;
+                    self.help_scroll_offset = 0;
+                    return;
+                }
+                KeyCode::Char('4') => {
+                    self.help_tab = 3;
+                    self.help_scroll_offset = 0;
+                    return;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.help_scroll_offset = self.help_scroll_offset.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.help_scroll_offset = self.help_scroll_offset.saturating_add(1);
+                    return;
+                }
+                KeyCode::PageUp => {
+                    self.help_scroll_offset = self.help_scroll_offset.saturating_sub(5);
+                    return;
+                }
+                KeyCode::PageDown => {
+                    self.help_scroll_offset = self.help_scroll_offset.saturating_add(5);
+                    return;
+                }
+                KeyCode::Home => {
+                    self.help_scroll_offset = 0;
+                    return;
+                }
+                _ => return,
+            }
+        }
+
         // 1. Global Shortcuts
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -188,12 +276,10 @@ impl App {
                     return;
                 }
                 KeyCode::Char('p') => {
-                    // Scroll stream up (strictly clamped to max scroll)
                     self.scroll_stream_up(5);
                     return;
                 }
                 KeyCode::Char('n') => {
-                    // Scroll stream down
                     self.scroll_stream_down(5);
                     return;
                 }
@@ -230,6 +316,11 @@ impl App {
 
         // 3. Tab navigation and View switches
         match key.code {
+            KeyCode::F(1) => {
+                self.help_active = !self.help_active;
+                self.help_scroll_offset = 0;
+                return;
+            }
             KeyCode::F(5) => {
                 self.layout_preset = self.layout_preset.next();
                 self.custom_split = None;
@@ -410,6 +501,28 @@ impl App {
             None => return,
         };
 
+        // Open help modal on /help or /?
+        if let CommandType::Macro { name, .. } = &parsed.command_type {
+            if name == "/help" || name == "/?" {
+                self.help_active = true;
+                self.help_tab = 0;
+                self.help_scroll_offset = 0;
+            }
+        }
+
+        // Safety Guard Check
+        if self.config.safety_guard_enabled {
+            if let Some(assessment) = SafetyGuard::inspect(&parsed) {
+                self.pending_guard = Some((parsed, assessment));
+                return;
+            }
+        }
+
+        self.execute_parsed_command(parsed).await;
+    }
+
+    pub async fn execute_parsed_command(&mut self, parsed: ParsedCommand) {
+        let input = parsed.raw_input.clone();
         let target_node = parsed.target_node.clone();
         let now = Local::now().format("%H:%M:%S").to_string();
 
@@ -480,6 +593,12 @@ impl App {
             duration,
             result,
         });
+
+        // Trim records to config.max_stream_records
+        if self.records.len() > self.config.max_stream_records {
+            let overflow = self.records.len() - self.config.max_stream_records;
+            self.records.drain(0..overflow);
+        }
     }
 
     pub async fn on_tick(&mut self) {

@@ -447,8 +447,9 @@ async fn test_stream_scroll_clamping_no_phantom_distance() {
     }
 
     // Scroll offset must be clamped strictly to total_lines - 1, without accumulating invisible phantom distance
-    let total_lines = xedis_tui::ui::stream_view::StreamView::total_lines_count(&app.records);
+    let total_lines = xedis_tui::ui::stream_view::StreamView::total_lines_count(&app.records, 80);
     let max_scroll = total_lines.saturating_sub(1);
+
     assert_eq!(app.scroll_offset, max_scroll);
 
     // Immediately on the very next PageDown, it should decrease immediately without delay

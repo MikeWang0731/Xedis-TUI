@@ -65,207 +65,9 @@ impl StreamView {
         let inner_stream = stream_block.inner(stream_area);
         f.render_widget(stream_block, stream_area);
 
-        // Collect all lines for smooth scrolling
-        let mut all_lines: Vec<Line> = Vec::new();
-
-        // Welcome banner if records are empty
-        if records.is_empty() {
-            all_lines.push(Line::from(""));
-            all_lines.push(Line::from(vec![
-                Span::styled(" [XEDIS] ", Style::default().bg(Color::Rgb(15, 45, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(" Welcome to Xedis-TUI", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(" · Terminal Workbench for Redis & Custom Middleware", Style::default().fg(Color::Rgb(165, 180, 195))),
-            ]));
-            all_lines.push(Line::from(""));
-            all_lines.push(Line::from(vec![
-                Span::styled(" Quick Start & Tips:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            ]));
-            all_lines.push(Line::from(vec![
-                Span::styled("  • Command:     ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled("Type any Redis command (e.g. ", Style::default().fg(Color::DarkGray)),
-                Span::styled("PING", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("INFO", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("GET <key>", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("SET <k> <v>", Style::default().fg(Color::Cyan)),
-                Span::styled(") and press Enter", Style::default().fg(Color::DarkGray)),
-            ]));
-            all_lines.push(Line::from(vec![
-                Span::styled("  • Macros:      ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled("Type ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/scan", Style::default().fg(Color::Yellow)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/bigkeys", Style::default().fg(Color::Green)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/interval", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/clear", Style::default().fg(Color::Rgb(180, 160, 255))),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/help", Style::default().fg(Color::Yellow)),
-            ]));
-            all_lines.push(Line::from(vec![
-                Span::styled("  • Navigation:  ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled("[Tab] Focus Pane · [F2~F4] Dashboard · [F5] Layout · [PageUp/Dn] Scroll", Style::default().fg(Color::DarkGray)),
-            ]));
-            all_lines.push(Line::from(""));
-        }
-
-        for (idx, record) in records.iter().enumerate() {
-            if idx > 0 {
-                all_lines.push(Line::from("")); // Card separator
-            }
-
-            // Card Header
-            let mut header_spans = Vec::new();
-            if let Some(node) = &record.target_node {
-                let (bg_col, fg_col) = if node == "all" || node == "cluster" {
-                    (Color::Rgb(60, 20, 70), Color::Rgb(255, 180, 255))
-                } else {
-                    (Color::Rgb(40, 30, 80), Color::Rgb(180, 160, 255))
-                };
-                header_spans.push(Span::styled(
-                    format!(" @{} ", node),
-                    Style::default().bg(bg_col).fg(fg_col).add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                header_spans.push(Span::styled(
-                    " DIRECT ",
-                    Style::default().bg(Color::Rgb(20, 50, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ));
-            }
-            header_spans.push(Span::raw(" "));
-
-            // Command highlight
-            let cmd_color = if record.command.trim_start().starts_with('/') {
-                Color::Yellow
-            } else {
-                Color::Cyan
-            };
-
-            header_spans.push(Span::styled(
-                &record.command,
-                Style::default().fg(cmd_color).add_modifier(Modifier::BOLD),
-            ));
-
-            let elapsed_str = if record.duration.as_millis() == 0 {
-                let micros = record.duration.as_micros();
-                if micros < 1000 {
-                    format!("{:.2}ms", micros as f64 / 1000.0)
-                } else {
-                    format!("{}μs", micros)
-                }
-            } else {
-                format!("{}ms", record.duration.as_millis())
-            };
-
-            header_spans.push(Span::styled(
-                format!("  [{} · {}]", record.timestamp, elapsed_str),
-                Style::default().fg(Color::DarkGray),
-            ));
-
-            all_lines.push(Line::from(header_spans));
-
-            // Card Body Formatted Values
-            match &record.result {
-                FormattedValue::Status(s) => {
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(s, Style::default().fg(Color::Rgb(16, 185, 129)).add_modifier(Modifier::BOLD)),
-                    ]));
-                }
-                FormattedValue::Integer(i) => {
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  (integer) "),
-                        Span::styled(i.to_string(), Style::default().fg(Color::Rgb(100, 200, 255))),
-                    ]));
-                }
-                FormattedValue::String(s) => {
-                    let clean = s.replace("\r\n", "\n").replace('\r', "");
-                    for line in clean.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with("--- Node:") {
-                            all_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), Style::default().fg(Color::Rgb(180, 160, 255)).add_modifier(Modifier::BOLD)),
-                            ]));
-                        } else if trimmed.starts_with('#') {
-                            all_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                            ]));
-                        } else if let Some((k, v)) = line.split_once(':') {
-                            all_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(format!("{}:", k), Style::default().fg(Color::Green)),
-                                Span::styled(format!(" {}", v), Style::default().fg(Color::White)),
-                            ]));
-                        } else {
-                            all_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                            ]));
-                        }
-                    }
-                }
-                FormattedValue::Json(json_str) => {
-                    for line in json_str.lines() {
-                        let highlighted = Self::syntax_highlight_json_line(line);
-                        all_lines.push(highlighted);
-                    }
-                }
-                FormattedValue::Table { headers, rows } => {
-                    let table_lines = Self::render_adaptive_table(headers, rows, inner_stream.width);
-                    all_lines.extend(table_lines);
-                }
-                FormattedValue::Tree { root, items } => {
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled("[Tree] ", Style::default().fg(Color::Yellow)),
-                        Span::styled(root, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    ]));
-                    for (i, (k, v)) in items.iter().enumerate() {
-                        let is_last = i == items.len() - 1;
-                        let branch = if is_last { "  └── " } else { "  ├── " };
-                        all_lines.push(Line::from(vec![
-                            Span::styled(branch, Style::default().fg(Color::DarkGray)),
-                            Span::styled(format!("{}: ", k), Style::default().fg(Color::Green)),
-                            Span::styled(v, Style::default().fg(Color::White)),
-                        ]));
-                    }
-                }
-                FormattedValue::List(items) => {
-                    for (i, item) in items.iter().enumerate() {
-                        all_lines.push(Line::from(vec![
-                            Span::styled(format!("  {:>2}) ", i + 1), Style::default().fg(Color::DarkGray)),
-                            Span::styled(item, Style::default().fg(Color::White)),
-                        ]));
-                    }
-                }
-                FormattedValue::Nil => {
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled("(nil)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
-                    ]));
-                }
-                FormattedValue::Error(err) => {
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(err, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                    ]));
-                }
-            }
-        }
-
-        // Apply dimming if autocomplete is active
-        if is_dimmed {
-            all_lines = all_lines.into_iter().map(Self::dim_line).collect();
-        }
-
-        // Apply viewport scroll offset
-        let total_lines = all_lines.len();
+        let max_w = inner_stream.width;
         let visible_height = inner_stream.height as usize;
+        let total_lines = Self::total_lines_count(records, max_w);
 
         let start_line = if total_lines <= visible_height {
             0
@@ -274,23 +76,33 @@ impl StreamView {
             let effective_scroll = scroll_offset.min(max_scroll);
             max_scroll.saturating_sub(effective_scroll)
         };
-
         let end_line = (start_line + visible_height).min(total_lines);
 
-        let visible_lines: Vec<ListItem> = if total_lines > 0 && start_line < total_lines {
-            all_lines[start_line..end_line]
-                .iter()
-                .cloned()
+        let visible_lines: Vec<ListItem> = if records.is_empty() {
+            let welcome = Self::render_welcome_banner(max_w);
+            let sliced = if start_line < welcome.len() {
+                let end = (start_line + visible_height).min(welcome.len());
+                welcome[start_line..end]
+                    .iter()
+                    .cloned()
+                    .map(|l| if is_dimmed { Self::dim_line(l) } else { l })
+                    .map(ListItem::new)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            sliced
+        } else {
+            Self::render_virtual_lines(records, start_line, end_line, max_w, is_dimmed)
+                .into_iter()
                 .map(ListItem::new)
                 .collect()
-        } else {
-            Vec::new()
         };
 
         let list_widget = List::new(visible_lines);
         f.render_widget(list_widget, inner_stream);
 
-        // 2. Prompt / Input Bar (Always stays highlighted and bright)
+        // 2. Prompt / Input Bar
         let prompt_border = if is_focused {
             Style::default().fg(Color::Cyan)
         } else {
@@ -324,43 +136,435 @@ impl StreamView {
         }
     }
 
-    pub fn total_lines_count(records: &[ExecutionRecord]) -> usize {
-        if records.is_empty() {
-            return 8;
+    /// Virtual viewport renderer: only allocates and renders lines in [start_line, end_line)
+    pub fn render_virtual_lines(
+        records: &[ExecutionRecord],
+        start_line: usize,
+        end_line: usize,
+        max_width: u16,
+        is_dimmed: bool,
+    ) -> Vec<Line<'static>> {
+        if start_line >= end_line || records.is_empty() {
+            return Vec::new();
         }
-        let mut count = 0;
+
+        let mut current_line_offset = 0;
+        let mut result_lines = Vec::new();
+
         for (idx, record) in records.iter().enumerate() {
-            if idx > 0 {
-                count += 1;
+            let record_lines_count = Self::single_record_line_count(record, idx > 0, max_width);
+            let record_end_offset = current_line_offset + record_lines_count;
+
+            // Check if this record intersects with [start_line, end_line)
+            if record_end_offset > start_line && current_line_offset < end_line {
+                let card_lines = Self::render_single_record(record, idx > 0, max_width);
+
+                let rec_start = if start_line > current_line_offset {
+                    start_line - current_line_offset
+                } else {
+                    0
+                };
+
+                let rec_end = if end_line < record_end_offset {
+                    end_line - current_line_offset
+                } else {
+                    card_lines.len()
+                };
+
+                if rec_start < card_lines.len() {
+                    let safe_end = rec_end.min(card_lines.len());
+                    for line in &card_lines[rec_start..safe_end] {
+                        if is_dimmed {
+                            result_lines.push(Self::dim_line(line.clone()));
+                        } else {
+                            result_lines.push(line.clone());
+                        }
+                    }
+                }
             }
-            count += 1; // Header line
-            match &record.result {
-                FormattedValue::Status(_) => count += 1,
-                FormattedValue::Integer(_) => count += 1,
-                FormattedValue::String(s) => {
-                    let clean = s.replace("\r\n", "\n").replace('\r', "");
-                    count += clean.lines().count().max(1);
+
+            current_line_offset = record_end_offset;
+            if current_line_offset >= end_line {
+                break;
+            }
+        }
+
+        result_lines
+    }
+
+    pub fn render_welcome_banner(max_width: u16) -> Vec<Line<'static>> {
+        let w = (max_width as usize).saturating_sub(4);
+        let mut lines = Vec::new();
+        lines.push(Line::from(""));
+
+        // Header Title
+        if w >= 75 {
+            lines.push(Line::from(vec![
+                Span::styled(" [XEDIS] ", Style::default().bg(Color::Rgb(15, 45, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" Welcome to Xedis-TUI", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" · Terminal Workbench for Redis & Custom Middleware", Style::default().fg(Color::Rgb(165, 180, 195))),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(" [XEDIS] ", Style::default().bg(Color::Rgb(15, 45, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" Welcome to Xedis-TUI", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("   "),
+                Span::styled("Terminal Workbench for Redis & Custom Middleware", Style::default().fg(Color::Rgb(165, 180, 195))),
+            ]));
+        }
+        lines.push(Line::from(""));
+
+        // Section header
+        lines.push(Line::from(vec![
+            Span::styled(" Quick Start & Tips:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]));
+
+        // Tip 1: Commands
+        if w >= 80 {
+            lines.push(Line::from(vec![
+                Span::styled("  • Command:     ", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled("Type any Redis command (e.g. ", Style::default().fg(Color::DarkGray)),
+                Span::styled("PING", Style::default().fg(Color::Cyan)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("INFO", Style::default().fg(Color::Cyan)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("GET <key>", Style::default().fg(Color::Cyan)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("SET <k> <v>", Style::default().fg(Color::Cyan)),
+                Span::styled(") and press Enter", Style::default().fg(Color::DarkGray)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("  • Command: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("PING", Style::default().fg(Color::Cyan)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("INFO", Style::default().fg(Color::Cyan)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("GET <key>", Style::default().fg(Color::Cyan)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("SET <k> <v>", Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("Type any command and press Enter to execute", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        // Tip 2: Macros
+        if w >= 75 {
+            lines.push(Line::from(vec![
+                Span::styled("  • Macros:      ", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled("Type ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/scan", Style::default().fg(Color::Yellow)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/bigkeys", Style::default().fg(Color::Green)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/interval", Style::default().fg(Color::Cyan)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/clear", Style::default().fg(Color::Rgb(180, 160, 255))),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/help", Style::default().fg(Color::Yellow)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("  • Macros:  ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("/scan", Style::default().fg(Color::Yellow)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/bigkeys", Style::default().fg(Color::Green)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/slowlog", Style::default().fg(Color::Yellow)),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/help", Style::default().fg(Color::Yellow)),
+            ]));
+        }
+
+        // Tip 3: Navigation
+        if w >= 88 {
+            lines.push(Line::from(vec![
+                Span::styled("  • Navigation:  ", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled("[Tab] Focus Pane · [F1] Handbook · [F2~F4] Dashboard · [F5] Layout · [PageUp/Dn] Scroll", Style::default().fg(Color::DarkGray)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("  • Navigation: ", Style::default().fg(Color::Cyan)),
+                Span::styled("[Tab] Focus · [F1] Handbook · [F5] Layout · [F2~F4] Dash", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines
+    }
+
+    pub fn single_record_line_count(record: &ExecutionRecord, has_separator: bool, max_width: u16) -> usize {
+        let mut count = if has_separator { 1 } else { 0 };
+        count += 1; // Header line
+
+        let content_width = (max_width as usize).saturating_sub(6).max(20);
+
+        match &record.result {
+            FormattedValue::Status(_) => count += 1,
+            FormattedValue::Integer(_) => count += 1,
+            FormattedValue::String(s) => {
+                let clean = s.replace("\r\n", "\n").replace('\r', "");
+                for line in clean.lines() {
+                    let wrapped_cnt = Self::wrap_count(line, content_width);
+                    count += wrapped_cnt.max(1);
                 }
-                FormattedValue::Json(json_str) => {
-                    count += json_str.lines().count().max(1);
+            }
+            FormattedValue::Json(json_str) => {
+                for line in json_str.lines() {
+                    let wrapped_cnt = Self::wrap_count(line, content_width);
+                    count += wrapped_cnt.max(1);
                 }
-                FormattedValue::Table { rows, .. } => {
-                    count += rows.len() + 4;
+            }
+            FormattedValue::Table { rows, .. } => {
+                count += rows.len() + 4; // top border + header + mid border + bot border
+            }
+            FormattedValue::Tree { items, .. } => {
+                count += items.len() + 1; // root + items
+            }
+            FormattedValue::List(items) => {
+                for item in items {
+                    let wrapped_cnt = Self::wrap_count(item, content_width.saturating_sub(6));
+                    count += wrapped_cnt.max(1);
                 }
-                FormattedValue::Tree { items, .. } => {
-                    count += items.len() + 1;
-                }
-                FormattedValue::List(items) => {
-                    count += items.len();
-                }
-                FormattedValue::Nil => count += 1,
-                FormattedValue::Error(_) => count += 1,
+            }
+            FormattedValue::Nil => count += 1,
+            FormattedValue::Error(err) => {
+                let wrapped_cnt = Self::wrap_count(err, content_width);
+                count += wrapped_cnt.max(1);
             }
         }
         count
     }
 
-    fn dim_line<'a>(line: Line<'a>) -> Line<'a> {
+    pub fn total_lines_count(records: &[ExecutionRecord], max_width: u16) -> usize {
+        if records.is_empty() {
+            return Self::render_welcome_banner(max_width).len();
+        }
+        let mut count = 0;
+        for (idx, record) in records.iter().enumerate() {
+            count += Self::single_record_line_count(record, idx > 0, max_width);
+        }
+        count
+    }
+
+    fn wrap_count(text: &str, max_width: usize) -> usize {
+        if text.len() <= max_width || max_width == 0 {
+            1
+        } else {
+            (text.len() + max_width - 1) / max_width
+        }
+    }
+
+    pub fn render_single_record(
+        record: &ExecutionRecord,
+        has_separator: bool,
+        max_width: u16,
+    ) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        if has_separator {
+            lines.push(Line::from(""));
+        }
+
+        let avail_w = (max_width as usize).saturating_sub(4).max(20);
+
+        // Card Header
+        let mut header_spans = Vec::new();
+        if let Some(node) = &record.target_node {
+            let (bg_col, fg_col) = if node == "all" || node == "cluster" {
+                (Color::Rgb(60, 20, 70), Color::Rgb(255, 180, 255))
+            } else {
+                (Color::Rgb(40, 30, 80), Color::Rgb(180, 160, 255))
+            };
+            header_spans.push(Span::styled(
+                format!(" @{} ", node),
+                Style::default().bg(bg_col).fg(fg_col).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            header_spans.push(Span::styled(
+                " DIRECT ",
+                Style::default().bg(Color::Rgb(20, 50, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
+        }
+        header_spans.push(Span::raw(" "));
+
+        let cmd_color = if record.command.trim_start().starts_with('/') {
+            Color::Yellow
+        } else {
+            Color::Cyan
+        };
+
+        header_spans.push(Span::styled(
+            record.command.clone(),
+            Style::default().fg(cmd_color).add_modifier(Modifier::BOLD),
+        ));
+
+        let elapsed_str = if record.duration.as_millis() == 0 {
+            let micros = record.duration.as_micros();
+            if micros < 1000 {
+                format!("{:.2}ms", micros as f64 / 1000.0)
+            } else {
+                format!("{}μs", micros)
+            }
+        } else {
+            format!("{}ms", record.duration.as_millis())
+        };
+
+        header_spans.push(Span::styled(
+            format!("  [{} · {}]", record.timestamp, elapsed_str),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        lines.push(Line::from(header_spans));
+
+        // Card Body with adaptive wrapping
+        match &record.result {
+            FormattedValue::Status(s) => {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(s.clone(), Style::default().fg(Color::Rgb(16, 185, 129)).add_modifier(Modifier::BOLD)),
+                ]));
+            }
+            FormattedValue::Integer(i) => {
+                lines.push(Line::from(vec![
+                    Span::raw("  (integer) "),
+                    Span::styled(i.to_string(), Style::default().fg(Color::Rgb(100, 200, 255))),
+                ]));
+            }
+            FormattedValue::String(s) => {
+                let clean = s.replace("\r\n", "\n").replace('\r', "");
+                for line in clean.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("--- Node:") {
+                        lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Rgb(180, 160, 255)).add_modifier(Modifier::BOLD)),
+                        ]));
+                    } else if trimmed.starts_with('#') {
+                        lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        ]));
+                    } else if let Some((k, v)) = line.split_once(':') {
+                        let total_len = line.len();
+                        if total_len > avail_w && avail_w > 20 {
+                            let chunks = Self::chunk_string(v.trim(), avail_w.saturating_sub(k.len() + 6));
+                            for (ci, chunk) in chunks.iter().enumerate() {
+                                if ci == 0 {
+                                    lines.push(Line::from(vec![
+                                        Span::raw("  "),
+                                        Span::styled(format!("{}:", k), Style::default().fg(Color::Green)),
+                                        Span::styled(format!(" {}", chunk), Style::default().fg(Color::White)),
+                                    ]));
+                                } else {
+                                    lines.push(Line::from(vec![
+                                        Span::raw("    "),
+                                        Span::styled(chunk.clone(), Style::default().fg(Color::White)),
+                                    ]));
+                                }
+                            }
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(format!("{}:", k), Style::default().fg(Color::Green)),
+                                Span::styled(format!(" {}", v), Style::default().fg(Color::White)),
+                            ]));
+                        }
+                    } else {
+                        let chunks = Self::chunk_string(line, avail_w.saturating_sub(4));
+                        for chunk in chunks {
+                            lines.push(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(chunk, Style::default().fg(Color::White)),
+                            ]));
+                        }
+                    }
+                }
+            }
+            FormattedValue::Json(json_str) => {
+                for line in json_str.lines() {
+                    let chunks = Self::chunk_string(line, avail_w.saturating_sub(4));
+                    for chunk in chunks {
+                        lines.push(Self::syntax_highlight_json_line(&chunk));
+                    }
+                }
+            }
+            FormattedValue::Table { headers, rows } => {
+                let table_lines = Self::render_adaptive_table(headers, rows, max_width);
+                lines.extend(table_lines);
+            }
+            FormattedValue::Tree { root, items } => {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("[Tree] ", Style::default().fg(Color::Yellow)),
+                    Span::styled(root.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                for (i, (k, v)) in items.iter().enumerate() {
+                    let is_last = i == items.len() - 1;
+                    let branch = if is_last { "  └── " } else { "  ├── " };
+                    lines.push(Line::from(vec![
+                        Span::styled(branch, Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{}: ", k), Style::default().fg(Color::Green)),
+                        Span::styled(v.clone(), Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
+            FormattedValue::List(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    let chunks = Self::chunk_string(item, avail_w.saturating_sub(8));
+                    for (ci, chunk) in chunks.iter().enumerate() {
+                        if ci == 0 {
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("  {:>2}) ", i + 1), Style::default().fg(Color::DarkGray)),
+                                Span::styled(chunk.clone(), Style::default().fg(Color::White)),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::raw("      "),
+                                Span::styled(chunk.clone(), Style::default().fg(Color::White)),
+                            ]));
+                        }
+                    }
+                }
+            }
+            FormattedValue::Nil => {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("(nil)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                ]));
+            }
+            FormattedValue::Error(err) => {
+                let chunks = Self::chunk_string(err, avail_w.saturating_sub(4));
+                for chunk in chunks {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(chunk, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                    ]));
+                }
+            }
+        }
+
+        lines
+    }
+
+    fn chunk_string(s: &str, chunk_size: usize) -> Vec<String> {
+        let size = chunk_size.max(10);
+        if s.len() <= size {
+            return vec![s.to_string()];
+        }
+        let mut result = Vec::new();
+        let mut chars = s.chars().peekable();
+        while chars.peek().is_some() {
+            let chunk: String = chars.by_ref().take(size).collect();
+            result.push(chunk);
+        }
+        result
+    }
+
+    pub fn dim_line<'a>(line: Line<'a>) -> Line<'a> {
         let dimmed_spans: Vec<Span<'a>> = line
             .spans
             .into_iter()
@@ -424,7 +628,6 @@ impl StreamView {
             return lines;
         }
 
-        // Calculate max content width for each column
         let mut col_widths = vec![4; num_cols];
         for (i, h) in headers.iter().enumerate() {
             col_widths[i] = col_widths[i].max(h.len());
@@ -437,7 +640,6 @@ impl StreamView {
             }
         }
 
-        // Cap total width to available space
         let total_avail = (max_width as usize).saturating_sub(4 + num_cols * 3);
         let current_total: usize = col_widths.iter().sum();
         if current_total > total_avail && total_avail > 20 {

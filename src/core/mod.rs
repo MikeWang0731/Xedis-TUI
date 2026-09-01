@@ -1,4 +1,5 @@
 pub mod autocomplete;
+pub mod guard;
 pub mod history;
 pub mod macro_engine;
 pub mod router;
@@ -7,6 +8,8 @@ pub mod telemetry;
 #[allow(unused_imports)]
 pub use autocomplete::{AutocompleteEngine, SuggestionItem, SuggestionKind};
 #[allow(unused_imports)]
+pub use guard::{DangerAssessment, RiskLevel, SafetyGuard};
+#[allow(unused_imports)]
 pub use history::HistoryManager;
 #[allow(unused_imports)]
 pub use macro_engine::MacroEngine;
@@ -14,3 +17,4 @@ pub use macro_engine::MacroEngine;
 pub use router::{CommandRouter, CommandType, ParsedCommand};
 #[allow(unused_imports)]
 pub use telemetry::{MetricsHistory, TelemetryMetrics, TelemetryParser};
+

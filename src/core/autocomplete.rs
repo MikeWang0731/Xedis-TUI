@@ -56,6 +56,21 @@ pub struct AutocompleteEngine;
 
 impl AutocompleteEngine {
     pub const REDIS_COMMANDS: &'static [RedisCommandSpec] = &[
+        // High-Risk & Safety Guard Commands
+        RedisCommandSpec { name: "KEYS", signature: "KEYS pattern", description: "[!] 全量键空间模式匹配 (千万级数据阻塞单线程，建议 /scan)", category: "Generic", example: "KEYS user:*" },
+        RedisCommandSpec { name: "FLUSHALL", signature: "FLUSHALL [ASYNC|SYNC]", description: "[!] 彻底清空 Redis 所有数据库的所有数据 (不可逆)", category: "Server", example: "FLUSHALL ASYNC" },
+        RedisCommandSpec { name: "FLUSHDB", signature: "FLUSHDB [ASYNC|SYNC]", description: "[!] 彻底清空当前数据库的所有数据 (不可逆)", category: "Server", example: "FLUSHDB ASYNC" },
+        RedisCommandSpec { name: "SHUTDOWN", signature: "SHUTDOWN [NOSAVE|SAVE|NOW|FORCE]", description: "[!] 同步保存并关闭终止 Redis 服务进程", category: "Server", example: "SHUTDOWN SAVE" },
+        RedisCommandSpec { name: "DEBUG", signature: "DEBUG [SEGFAULT|SLEEP|OBJECT|RELOAD]", description: "[!] 内部诊断与调试命令族 (包含崩溃与强制休眠)", category: "Server", example: "DEBUG SLEEP 5" },
+        RedisCommandSpec { name: "SAVE", signature: "SAVE", description: "[!] 同步阻塞生成 RDB 快照文件 (阻塞主线程所有请求)", category: "Server", example: "SAVE" },
+        RedisCommandSpec { name: "BGSAVE", signature: "BGSAVE [SCHEDULE]", description: "[!] 后台异步 Fork 子进程生成 RDB 快照 (Copy-On-Write 内存翻倍)", category: "Server", example: "BGSAVE" },
+        RedisCommandSpec { name: "BGREWRITEAOF", signature: "BGREWRITEAOF", description: "[!] 后台异步重写 AOF 持久化日志文件", category: "Server", example: "BGREWRITEAOF" },
+        RedisCommandSpec { name: "SLAVEOF", signature: "SLAVEOF host port | NO ONE", description: "[!] 动态修改从节点复制目标或脱离集群独立", category: "Replication", example: "SLAVEOF NO ONE" },
+        RedisCommandSpec { name: "REPLICAOF", signature: "REPLICAOF host port | NO ONE", description: "[!] 动态修改从节点复制目标或脱离集群独立", category: "Replication", example: "REPLICAOF NO ONE" },
+        RedisCommandSpec { name: "SWAPDB", signature: "SWAPDB index1 index2", description: "[!] 原子交换两个 Redis 数据库的键空间编号映射", category: "Server", example: "SWAPDB 0 1" },
+        RedisCommandSpec { name: "MIGRATE", signature: "MIGRATE host port key destination-db timeout [COPY|REPLACE]", description: "[!] 原子跨实例迁移指定 Key 至目标 Redis 实例", category: "Generic", example: "MIGRATE 127.0.0.1 6380 user:1001 0 5000" },
+        RedisCommandSpec { name: "RESTORE", signature: "RESTORE key ttl serialized-value [REPLACE|ABSTTL]", description: "反序列化二进制数据并恢复写入指定 Key", category: "Generic", example: "RESTORE user:copy 0 \"\\x0a...\"" },
+
         // String Commands
         RedisCommandSpec { name: "GET", signature: "GET key", description: "获取指定 Key 的字符串值", category: "String", example: "GET user:1001:name" },
         RedisCommandSpec { name: "SET", signature: "SET key value [EX sec|PX ms] [NX|XX]", description: "设置 Key 的字符串值及可选过期时间", category: "String", example: "SET token:session \"xyz990\" EX 3600" },
@@ -89,7 +104,7 @@ impl AutocompleteEngine {
 
         // Set Commands
         RedisCommandSpec { name: "SADD", signature: "SADD key member [member ...]", description: "向集合中添加一个或多个成员", category: "Set", example: "SADD tag:books \"sci-fi\" \"tech\"" },
-        RedisCommandSpec { name: "SMEMBERS", signature: "SMEMBERS key", description: "获取集合中的所有成员 (大集合注意)", category: "Set", example: "SMEMBERS tag:books" },
+        RedisCommandSpec { name: "SMEMBERS", signature: "SMEMBERS key", description: "[!] 获取集合中所有成员 (大集合推荐用 SSCAN)", category: "Set", example: "SMEMBERS tag:books" },
         RedisCommandSpec { name: "SREM", signature: "SREM key member [member ...]", description: "从集合中移除一个或多个成员", category: "Set", example: "SREM tag:books \"deprecated\"" },
         RedisCommandSpec { name: "SISMEMBER", signature: "SISMEMBER key member", description: "判断成员元素是否是集合的成员", category: "Set", example: "SISMEMBER tag:books \"tech\"" },
         RedisCommandSpec { name: "SCARD", signature: "SCARD key", description: "获取集合中成员的数量", category: "Set", example: "SCARD tag:books" },
@@ -104,19 +119,36 @@ impl AutocompleteEngine {
         RedisCommandSpec { name: "ZREM", signature: "ZREM key member [member ...]", description: "移除有序集合中的一个或多个成员", category: "ZSet", example: "ZREM rank:players \"Bob\"" },
 
         // Key & Generic Commands
-        RedisCommandSpec { name: "DEL", signature: "DEL key [key ...]", description: "删除一个或多个指定 Key", category: "Generic", example: "DEL temp:cache:01" },
+        RedisCommandSpec { name: "DEL", signature: "DEL key [key ...]", description: "同步删除一个或多个指定 Key", category: "Generic", example: "DEL temp:cache:01" },
+        RedisCommandSpec { name: "UNLINK", signature: "UNLINK key [key ...]", description: "非阻塞异步删除一个或多个 Key (大 Key 推荐，优于 DEL)", category: "Generic", example: "UNLINK big_cache_key" },
         RedisCommandSpec { name: "EXISTS", signature: "EXISTS key [key ...]", description: "检查一个或多个 Key 是否存在", category: "Generic", example: "EXISTS user:1001" },
         RedisCommandSpec { name: "EXPIRE", signature: "EXPIRE key seconds", description: "为 Key 设置生存时间 (秒)", category: "Generic", example: "EXPIRE session:id 1800" },
+        RedisCommandSpec { name: "EXPIREAT", signature: "EXPIREAT key unix-time-seconds", description: "按 UNIX 时间戳为 Key 设置绝对过期时间", category: "Generic", example: "EXPIREAT token:1 1788228000" },
+        RedisCommandSpec { name: "PEXPIRE", signature: "PEXPIRE key milliseconds", description: "以毫秒为单位设置 Key 的生存时间", category: "Generic", example: "PEXPIRE lock:order 500" },
         RedisCommandSpec { name: "TTL", signature: "TTL key", description: "获取 Key 的剩余生存时间 (秒)", category: "Generic", example: "TTL session:id" },
+        RedisCommandSpec { name: "PTTL", signature: "PTTL key", description: "以毫秒为单位获取 Key 的剩余生存时间", category: "Generic", example: "PTTL session:id" },
         RedisCommandSpec { name: "PERSIST", signature: "PERSIST key", description: "移除 Key 的过期时间，使其永久有效", category: "Generic", example: "PERSIST session:id" },
         RedisCommandSpec { name: "TYPE", signature: "TYPE key", description: "返回 Key 所存储的值的类型", category: "Generic", example: "TYPE user:1001" },
+        RedisCommandSpec { name: "RENAME", signature: "RENAME key newkey", description: "将指定 Key 重命名为 newkey", category: "Generic", example: "RENAME old_key new_key" },
+        RedisCommandSpec { name: "RENAMENX", signature: "RENAMENX key newkey", description: "仅当 newkey 不存在时重命名 Key", category: "Generic", example: "RENAMENX old_key new_key" },
+        RedisCommandSpec { name: "RANDOMKEY", signature: "RANDOMKEY", description: "从当前数据库中随机返回一个 Key", category: "Generic", example: "RANDOMKEY" },
+        RedisCommandSpec { name: "TOUCH", signature: "TOUCH key [key ...]", description: "更新指定 Key 的最后访问时间 (更新 LRU)", category: "Generic", example: "TOUCH session:1001" },
+        RedisCommandSpec { name: "COPY", signature: "COPY source destination [DB destination-db] [REPLACE]", description: "将源 Key 复制至目标 Key (Redis 6.2+)", category: "Generic", example: "COPY user:1001 user:1001:bak" },
+        RedisCommandSpec { name: "DUMP", signature: "DUMP key", description: "获取指定 Key 的 RESP 序列化二进制内容", category: "Generic", example: "DUMP user:1001" },
         RedisCommandSpec { name: "SCAN", signature: "SCAN cursor [MATCH pattern] [COUNT count]", description: "非阻塞游标迭代当前数据库中的键", category: "Generic", example: "SCAN 0 MATCH user:* COUNT 20" },
         RedisCommandSpec { name: "MEMORY", signature: "MEMORY [USAGE|STATS|PURGE|DOCTOR]", description: "内存分析与诊断管理命令族", category: "Generic", example: "MEMORY USAGE mykey" },
 
-        // Server & Cluster Commands
+        // Server, Connection & Cluster Commands
         RedisCommandSpec { name: "PING", signature: "PING [message]", description: "测试与服务端的连通性，返回 PONG", category: "Server", example: "PING" },
+        RedisCommandSpec { name: "SELECT", signature: "SELECT index", description: "切换当前连接所操作的数据库编号 (0~15)", category: "Server", example: "SELECT 1" },
+        RedisCommandSpec { name: "AUTH", signature: "AUTH [username] password", description: "向 Redis 服务端提交连接密码或 ACL 认证", category: "Server", example: "AUTH \"my_password\"" },
         RedisCommandSpec { name: "INFO", signature: "INFO [section]", description: "获取 Redis 服务器各项实时指标与分段统计", category: "Server", example: "INFO persistence" },
         RedisCommandSpec { name: "DBSIZE", signature: "DBSIZE", description: "返回当前数据库的 Key 总数", category: "Server", example: "DBSIZE" },
+        RedisCommandSpec { name: "TIME", signature: "TIME", description: "获取 Redis 服务器当前 UNIX 时间戳与微秒数", category: "Server", example: "TIME" },
+        RedisCommandSpec { name: "ROLE", signature: "ROLE", description: "获取当前实例的角色与复制偏移量状态", category: "Server", example: "ROLE" },
+        RedisCommandSpec { name: "LASTSAVE", signature: "LASTSAVE", description: "返回最近一次成功持久化落盘的 UNIX 时间戳", category: "Server", example: "LASTSAVE" },
+        RedisCommandSpec { name: "MONITOR", signature: "MONITOR", description: "实时监听并流式输出服务端接收到的所有命令", category: "Server", example: "MONITOR" },
+        RedisCommandSpec { name: "COMMAND", signature: "COMMAND [COUNT|DOCS|INFO|LIST]", description: "查询 Redis 完整命令集元数据与统计", category: "Server", example: "COMMAND COUNT" },
         RedisCommandSpec { name: "SLOWLOG", signature: "SLOWLOG [GET|LEN|RESET]", description: "慢查询日志管理命令族", category: "Server", example: "SLOWLOG GET 10" },
         RedisCommandSpec { name: "CLIENT", signature: "CLIENT [LIST|KILL|GETNAME|SETNAME|PAUSE|ID]", description: "客户端连接管理命令族", category: "Server", example: "CLIENT LIST" },
         RedisCommandSpec { name: "CONFIG", signature: "CONFIG [GET|SET|REWRITE|RESETSTAT]", description: "运行时配置动态查询与管理命令族", category: "Server", example: "CONFIG GET maxmemory*" },
@@ -124,6 +156,38 @@ impl AutocompleteEngine {
     ];
 
     pub const SUBCOMMANDS: &'static [SubcommandSpec] = &[
+        // FLUSHALL subcommands
+        SubcommandSpec { parent_cmd: "FLUSHALL", name: "ASYNC", signature: "FLUSHALL ASYNC", description: "[推荐] 后台异步线程清空全部数据库，避免主线程阻塞", example: "FLUSHALL ASYNC" },
+        SubcommandSpec { parent_cmd: "FLUSHALL", name: "SYNC", signature: "FLUSHALL SYNC", description: "同步清空全部数据库 (大实例易导致阻塞)", example: "FLUSHALL SYNC" },
+
+        // FLUSHDB subcommands
+        SubcommandSpec { parent_cmd: "FLUSHDB", name: "ASYNC", signature: "FLUSHDB ASYNC", description: "[推荐] 后台异步线程清空当前数据库，避免主线程阻塞", example: "FLUSHDB ASYNC" },
+        SubcommandSpec { parent_cmd: "FLUSHDB", name: "SYNC", signature: "FLUSHDB SYNC", description: "同步清空当前数据库", example: "FLUSHDB SYNC" },
+
+        // SHUTDOWN subcommands
+        SubcommandSpec { parent_cmd: "SHUTDOWN", name: "SAVE", signature: "SHUTDOWN SAVE", description: "强制落盘保存 RDB 快照后安全退出进程", example: "SHUTDOWN SAVE" },
+        SubcommandSpec { parent_cmd: "SHUTDOWN", name: "NOSAVE", signature: "SHUTDOWN NOSAVE", description: "不执行落盘保存，立即终止进程退出", example: "SHUTDOWN NOSAVE" },
+        SubcommandSpec { parent_cmd: "SHUTDOWN", name: "NOW", signature: "SHUTDOWN NOW", description: "跳过等待中客户端，立即终止退出", example: "SHUTDOWN NOW" },
+        SubcommandSpec { parent_cmd: "SHUTDOWN", name: "FORCE", signature: "SHUTDOWN FORCE", description: "强制忽略保存失败错误退出", example: "SHUTDOWN FORCE" },
+
+        // DEBUG subcommands
+        SubcommandSpec { parent_cmd: "DEBUG", name: "SEGFAULT", signature: "DEBUG SEGFAULT", description: "[!] 强制 Redis 进程发生段错误崩溃退出", example: "DEBUG SEGFAULT" },
+        SubcommandSpec { parent_cmd: "DEBUG", name: "SLEEP", signature: "DEBUG SLEEP <seconds>", description: "[!] 强制 Redis 主线程休眠挂起指定秒数", example: "DEBUG SLEEP 5" },
+        SubcommandSpec { parent_cmd: "DEBUG", name: "OBJECT", signature: "DEBUG OBJECT <key>", description: "获取指定 Key 的内部编码、引用计数与 LRU 诊断信息", example: "DEBUG OBJECT mykey" },
+
+        // REPLICAOF / SLAVEOF subcommands
+        SubcommandSpec { parent_cmd: "REPLICAOF", name: "NO ONE", signature: "REPLICAOF NO ONE", description: "停止主从复制并将当前节点提升为主节点 (Master)", example: "REPLICAOF NO ONE" },
+        SubcommandSpec { parent_cmd: "SLAVEOF", name: "NO ONE", signature: "SLAVEOF NO ONE", description: "停止主从复制并将当前节点提升为主节点 (Master)", example: "SLAVEOF NO ONE" },
+
+        // BGSAVE subcommands
+        SubcommandSpec { parent_cmd: "BGSAVE", name: "SCHEDULE", signature: "BGSAVE SCHEDULE", description: "若当前有 AOF 重写正在执行，则排队等待其完成后再触发快照", example: "BGSAVE SCHEDULE" },
+
+        // COMMAND subcommands
+        SubcommandSpec { parent_cmd: "COMMAND", name: "COUNT", signature: "COMMAND COUNT", description: "返回服务端支持的命令总数", example: "COMMAND COUNT" },
+        SubcommandSpec { parent_cmd: "COMMAND", name: "DOCS", signature: "COMMAND DOCS [command-name]", description: "返回指定命令的官方文档与参数元数据规格", example: "COMMAND DOCS get" },
+        SubcommandSpec { parent_cmd: "COMMAND", name: "INFO", signature: "COMMAND INFO [command-name ...]", description: "返回指定命令的权限标记、Arity 参数量与键位规范", example: "COMMAND INFO mget" },
+        SubcommandSpec { parent_cmd: "COMMAND", name: "LIST", signature: "COMMAND LIST", description: "列出当前服务端支持的所有命令名称", example: "COMMAND LIST" },
+
         // INFO sections
         SubcommandSpec { parent_cmd: "INFO", name: "PERSISTENCE", signature: "INFO persistence", description: "RDB 周期快照与 AOF 持久化状态、重写进度及落盘耗时统计", example: "INFO persistence" },
         SubcommandSpec { parent_cmd: "INFO", name: "SERVER", signature: "INFO server", description: "Redis 服务端核心版本、运行模式、操作系统、进程 ID 与运行时间", example: "INFO server" },
@@ -269,7 +333,7 @@ impl AutocompleteEngine {
             }
         }
 
-        // If there is already a parent command (e.g. "INFO", "CLUSTER", "CLIENT", "/interval")
+        // If there is already a parent command (e.g. "INFO", "CLUSTER", "CLIENT", "/interval", "FLUSHALL", "DEBUG", etc.)
         if !effective_tokens.is_empty() && (effective_tokens.len() > 1 || is_typing_new_token) {
             let parent_cmd = effective_tokens[0].to_uppercase();
             let sub_prefix = if is_typing_new_token {

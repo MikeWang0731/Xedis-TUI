@@ -54,6 +54,10 @@ pub struct AppConfig {
     pub default_layout: LayoutPreset,
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
+    #[serde(default = "default_max_stream_records")]
+    pub max_stream_records: usize,
+    #[serde(default = "default_safety_guard_enabled")]
+    pub safety_guard_enabled: bool,
 }
 
 fn default_host() -> String {
@@ -68,6 +72,14 @@ fn default_poll_interval_ms() -> u64 {
     1000
 }
 
+fn default_max_stream_records() -> usize {
+    500
+}
+
+fn default_safety_guard_enabled() -> bool {
+    true
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -77,6 +89,8 @@ impl Default for AppConfig {
             cluster_mode: false,
             default_layout: LayoutPreset::Balanced,
             poll_interval_ms: default_poll_interval_ms(),
+            max_stream_records: default_max_stream_records(),
+            safety_guard_enabled: default_safety_guard_enabled(),
         }
     }
 }
