@@ -197,9 +197,275 @@ impl XedisClient {
         }
     }
 
-    pub async fn execute_command(&mut self, _target_node: Option<&str>, cmd: &str, args: &[String]) -> (FormattedValue, Duration) {
+    pub fn is_broadcast_target(target: &str) -> bool {
+        let t = target.to_lowercase();
+        t == "all" || t == "cluster" || t == "all-masters" || t == "all-replicas"
+    }
+
+    pub fn filter_nodes_for_target(&self, target: &str) -> Vec<ClusterNode> {
+        let all_nodes = self.telemetry.nodes();
+        let target_lower = target.to_lowercase();
+        if target_lower == "all" || target_lower == "cluster" {
+            if all_nodes.is_empty() {
+                return ClusterTopology::mock_cluster_topology()
+                    .shards
+                    .iter()
+                    .map(|s| s.master.clone())
+                    .collect();
+            }
+            all_nodes
+        } else if target_lower == "all-masters" {
+            let masters: Vec<_> = all_nodes
+                .iter()
+                .filter(|n| n.role.eq_ignore_ascii_case("Master"))
+                .cloned()
+                .collect();
+            if masters.is_empty() {
+                ClusterTopology::mock_cluster_topology()
+                    .shards
+                    .into_iter()
+                    .map(|s| s.master)
+                    .collect()
+            } else {
+                masters
+            }
+        } else if target_lower == "all-replicas" {
+            all_nodes
+                .into_iter()
+                .filter(|n| n.role.eq_ignore_ascii_case("Replica"))
+                .collect()
+        } else {
+            all_nodes
+                .into_iter()
+                .filter(|n| {
+                    n.id.eq_ignore_ascii_case(target)
+                        || n.address.eq_ignore_ascii_case(target)
+                        || n.raw_id.starts_with(target)
+                        || n.address.split(':').next() == Some(target)
+                })
+                .collect()
+        }
+    }
+
+    pub fn build_node_url(base_url: &str, node_addr: &str) -> String {
+        let clean_addr = if let Some((addr, _cport)) = node_addr.split_once('@') {
+            addr
+        } else {
+            node_addr
+        };
+
+        if let Some(rest) = base_url.strip_prefix("redis://") {
+            if let Some((auth, _)) = rest.split_once('@') {
+                return format!("redis://{}@{}", auth, clean_addr);
+            }
+            return format!("redis://{}", clean_addr);
+        }
+        if let Some(rest) = base_url.strip_prefix("rediss://") {
+            if let Some((auth, _)) = rest.split_once('@') {
+                return format!("rediss://{}@{}", auth, clean_addr);
+            }
+            return format!("rediss://{}", clean_addr);
+        }
+        format!("redis://{}", clean_addr)
+    }
+
+    pub fn format_node_section_header(node: &ClusterNode, duration: Duration) -> String {
+        let latency_str = if duration.as_micros() < 1000 {
+            format!("{:.2}ms", duration.as_micros() as f64 / 1000.0)
+        } else {
+            format!("{}ms", duration.as_millis())
+        };
+        format!(
+            "--- Node: @{} ({} · {}) [{}] ---",
+            node.id, node.address, node.role, latency_str
+        )
+    }
+
+    fn generate_mock_response_for_node(node: &ClusterNode, cmd: &str, args: &[String]) -> FormattedValue {
+        let upper_cmd = cmd.to_uppercase();
+        match upper_cmd.as_str() {
+            "PING" => FormattedValue::Status("PONG".to_string()),
+            "GET" => {
+                let key = args.first().map(|s| s.as_str()).unwrap_or("key");
+                FormattedValue::String(format!("val_for_{} (from {})", key, node.id))
+            }
+            "SET" => FormattedValue::Status("OK".to_string()),
+            "DEL" => FormattedValue::Integer(1),
+            "EXISTS" => FormattedValue::Integer(1),
+            "TTL" => FormattedValue::Integer(3600),
+            "TYPE" => FormattedValue::Status("string".to_string()),
+            "HGETALL" => FormattedValue::Table {
+                headers: vec!["Field".to_string(), "Value".to_string()],
+                rows: vec![
+                    vec!["user_id".to_string(), "\"usr_88234\"".to_string()],
+                    vec!["role".to_string(), "\"admin\"".to_string()],
+                    vec!["login_ip".to_string(), "\"192.168.1.104\"".to_string()],
+                    vec!["node".to_string(), format!("\"{}\"", node.id)],
+                    vec!["ttl".to_string(), "3600 (1h)".to_string()],
+                ],
+            },
+            "LRANGE" => FormattedValue::List(vec![
+                format!("{}:task:001", node.id),
+                format!("{}:task:002", node.id),
+                format!("{}:task:003", node.id),
+            ]),
+            "SMEMBERS" => FormattedValue::List(vec![
+                "admin".to_string(),
+                "developer".to_string(),
+                "tester".to_string(),
+            ]),
+            "SCAN" => {
+                let prefix = args.get(1).map(|s| s.trim_end_matches('*')).unwrap_or("key");
+                FormattedValue::Json(
+                    serde_json::to_string_pretty(&serde_json::json!([
+                        format!("{}:{}:001", prefix, node.id),
+                        format!("{}:{}:002", prefix, node.id),
+                    ]))
+                    .unwrap_or_default(),
+                )
+            }
+            "INFO" => {
+                let port = node.address.split(':').nth(1).unwrap_or("6379");
+                FormattedValue::String(format!(
+                    "# Server\nredis_version:7.2.4\nredis_mode:cluster\ntcp_port:{}\nrun_id:{}\nrole:{}\n\n# Memory\nused_memory_human:2.14G\nmaxmemory_human:4.00G",
+                    port, node.raw_id, node.role.to_lowercase()
+                ))
+            }
+            "CLUSTER" => {
+                if args.first().map(|s| s.to_uppercase()).as_deref() == Some("NODES") {
+                    FormattedValue::String("node-1 127.0.0.1:6379@16379 master - 0 1788157290000 1 connected 0-5460\nnode-2 127.0.0.1:6380@16380 master - 0 1788157290000 2 connected 5461-10922\nnode-3 127.0.0.1:6381@16381 master - 0 1788157290000 3 connected 10923-16383".to_string())
+                } else if args.first().map(|s| s.to_uppercase()).as_deref() == Some("INFO") {
+                    FormattedValue::String(
+                        "cluster_state: ok\ncluster_slots_assigned: 16384\ncluster_slots_ok: 16384\ncluster_slots_pfail: 0\ncluster_slots_fail: 0\ncluster_known_nodes: 6\ncluster_size: 3\ncluster_current_epoch: 6\ncluster_my_epoch: 1\ncluster_stats_messages_ping_sent: 520\ncluster_stats_messages_pong_sent: 520\ncluster_stats_messages_sent: 1040\ncluster_stats_messages_ping_received: 520\ncluster_stats_messages_pong_received: 520\ncluster_stats_messages_received: 1040\ntotal_cluster_links_buffer_limit_exceeded: 0".to_string()
+                    )
+                } else {
+                    FormattedValue::Status("OK".to_string())
+                }
+            }
+            _ => FormattedValue::Status(format!("OK (Simulated response for {} on @{})", cmd, node.id)),
+        }
+    }
+
+    async fn execute_broadcast_command(&self, target: &str, cmd: &str, args: &[String]) -> (FormattedValue, Duration) {
+        let start = Instant::now();
+        let target_nodes = self.filter_nodes_for_target(target);
+
+        if target_nodes.is_empty() {
+            return (
+                FormattedValue::Error("No reachable cluster nodes found for broadcast".to_string()),
+                start.elapsed(),
+            );
+        }
+
+        match &self.backend {
+            XedisBackend::Live(_) | XedisBackend::LiveCluster(_) => {
+                let mut tasks = Vec::new();
+                for node in target_nodes {
+                    let node_url = Self::build_node_url(&self.target_url, &node.address);
+                    let cmd_str = cmd.to_string();
+                    let args_vec = args.to_vec();
+
+                    tasks.push(async move {
+                        let node_start = Instant::now();
+                        match redis::Client::open(node_url.as_str()) {
+                            Ok(client) => match client.get_multiplexed_tokio_connection().await {
+                                Ok(mut conn) => {
+                                    let mut command = redis::cmd(&cmd_str);
+                                    for arg in &args_vec {
+                                        command.arg(arg);
+                                    }
+                                    match command.query_async::<redis::Value>(&mut conn).await {
+                                        Ok(val) => {
+                                            let formatted = FormattedValue::from_redis_value(val);
+                                            (node, formatted, node_start.elapsed())
+                                        }
+                                        Err(e) => (
+                                            node,
+                                            FormattedValue::Error(format!("ERR {}", e)),
+                                            node_start.elapsed(),
+                                        ),
+                                    }
+                                }
+                                Err(e) => (
+                                    node,
+                                    FormattedValue::Error(format!("Connection error: {}", e)),
+                                    node_start.elapsed(),
+                                ),
+                            },
+                            Err(e) => (
+                                node,
+                                FormattedValue::Error(format!("Client error: {}", e)),
+                                node_start.elapsed(),
+                            ),
+                        }
+                    });
+                }
+
+                let results = futures_util::future::join_all(tasks).await;
+                let mut sections = Vec::new();
+                for (node, formatted, node_duration) in results {
+                    let header = Self::format_node_section_header(&node, node_duration);
+                    let body = formatted.to_display_text();
+                    sections.push(format!("{}\n{}", header, body.trim()));
+                }
+
+                (FormattedValue::String(sections.join("\n\n")), start.elapsed())
+            }
+            XedisBackend::DemoMock => {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                let mut sections = Vec::new();
+                for node in target_nodes {
+                    let simulated_duration = Duration::from_micros((node.ping_ms * 1000.0) as u64).max(Duration::from_micros(200));
+                    let header = Self::format_node_section_header(&node, simulated_duration);
+                    let val = Self::generate_mock_response_for_node(&node, cmd, args);
+                    let body = val.to_display_text();
+                    sections.push(format!("{}\n{}", header, body.trim()));
+                }
+                (FormattedValue::String(sections.join("\n\n")), start.elapsed())
+            }
+        }
+    }
+
+    pub async fn execute_command(&mut self, target_node: Option<&str>, cmd: &str, args: &[String]) -> (FormattedValue, Duration) {
         let start = Instant::now();
 
+        // 1. Check if broadcast mode is requested (@all, @cluster, @all-masters, @all-replicas)
+        if let Some(target) = target_node {
+            if Self::is_broadcast_target(target) {
+                return self.execute_broadcast_command(target, cmd, args).await;
+            }
+        }
+
+        // 2. Check if a specific single node is requested (@node-1, @127.0.0.1:6379, etc.)
+        if let Some(target) = target_node {
+            let matched_nodes = self.filter_nodes_for_target(target);
+            if let Some(node) = matched_nodes.first() {
+                match &self.backend {
+                    XedisBackend::Live(_) | XedisBackend::LiveCluster(_) => {
+                        let node_url = Self::build_node_url(&self.target_url, &node.address);
+                        if let Ok(client) = redis::Client::open(node_url.as_str()) {
+                            if let Ok(mut conn) = client.get_multiplexed_tokio_connection().await {
+                                let mut command = redis::cmd(cmd);
+                                for arg in args {
+                                    command.arg(arg);
+                                }
+                                match command.query_async::<redis::Value>(&mut conn).await {
+                                    Ok(val) => return (FormattedValue::from_redis_value(val), start.elapsed()),
+                                    Err(e) => return (FormattedValue::Error(format!("ERR {}", e)), start.elapsed()),
+                                }
+                            }
+                        }
+                    }
+                    XedisBackend::DemoMock => {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        let res = Self::generate_mock_response_for_node(node, cmd, args);
+                        return (res, start.elapsed());
+                    }
+                }
+            }
+        }
+
+        // 3. Fallback / Default execution on primary backend connection
         match &mut self.backend {
             XedisBackend::Live(conn) => {
                 let mut command = redis::cmd(cmd);
@@ -223,72 +489,111 @@ impl XedisClient {
             }
             XedisBackend::DemoMock => {
                 tokio::time::sleep(Duration::from_millis(1)).await;
-                let elapsed = start.elapsed();
-                let upper_cmd = cmd.to_uppercase();
-
-                let res = match upper_cmd.as_str() {
-                    "PING" => FormattedValue::Status("PONG".to_string()),
-                    "GET" => {
-                        let key = args.first().map(|s| s.as_str()).unwrap_or("key");
-                        FormattedValue::String(format!("val_for_{}", key))
-                    }
-                    "SET" => FormattedValue::Status("OK".to_string()),
-                    "DEL" => FormattedValue::Integer(1),
-                    "EXISTS" => FormattedValue::Integer(1),
-                    "TTL" => FormattedValue::Integer(3600),
-                    "TYPE" => FormattedValue::Status("string".to_string()),
-                    "HGETALL" => FormattedValue::Table {
-                        headers: vec!["Field".to_string(), "Value".to_string()],
-                        rows: vec![
-                            vec!["user_id".to_string(), "\"usr_88234\"".to_string()],
-                            vec!["role".to_string(), "\"admin\"".to_string()],
-                            vec!["login_ip".to_string(), "\"192.168.1.104\"".to_string()],
-                            vec!["ttl".to_string(), "3600 (1h)".to_string()],
-                        ],
-                    },
-                    "LRANGE" => FormattedValue::List(vec![
-                        "job:task:001".to_string(),
-                        "job:task:002".to_string(),
-                        "job:task:003".to_string(),
-                    ]),
-                    "SMEMBERS" => FormattedValue::List(vec![
-                        "admin".to_string(),
-                        "developer".to_string(),
-                        "tester".to_string(),
-                    ]),
-                    "SCAN" => FormattedValue::Json(
-                        serde_json::to_string_pretty(&serde_json::json!([
-                            "order:20260831001",
-                            "order:20260831002",
-                            "order:20260831003"
-                        ]))
-                        .unwrap_or_default(),
-                    ),
-                    "INFO" => FormattedValue::String(
-                        "# Server\nredis_version:7.2.4\nredis_mode:cluster\nos:Darwin\n\n# Memory\nused_memory_human:2.14G\nmaxmemory_human:4.00G".to_string(),
-                    ),
-                    "CLUSTER" => {
-                        if args.first().map(|s| s.to_uppercase()).as_deref() == Some("NODES") {
-                            FormattedValue::String("node-1 127.0.0.1:6379@16379 master - 0 1788157290000 1 connected 0-5460\nnode-2 127.0.0.1:6380@16380 master - 0 1788157290000 2 connected 5461-10922\nnode-3 127.0.0.1:6381@16381 master - 0 1788157290000 3 connected 10923-16383".to_string())
-                        } else {
-                            FormattedValue::Status("OK".to_string())
-                        }
-                    }
-                    _ => FormattedValue::Status(format!("OK (Simulated response for {})", cmd)),
+                let default_node = ClusterNode {
+                    id: "node-1".to_string(),
+                    raw_id: "e01a1b2c3d4e5f60718293a4b5c6d7e8f9012345".to_string(),
+                    address: "127.0.0.1:6379".to_string(),
+                    cport: 16379,
+                    role: "Master".to_string(),
+                    master_id: None,
+                    is_healthy: true,
+                    ping_ms: 0.38,
+                    slots_raw: "0-5460".to_string(),
+                    slot_ranges: vec![(0, 5460)],
+                    slot_count: 5461,
+                    key_count: 402_830,
                 };
-                (res, elapsed)
+                let res = Self::generate_mock_response_for_node(&default_node, cmd, args);
+                (res, start.elapsed())
+            }
+        }
+    }
+
+    async fn execute_broadcast_scan(&self, target: &str, args: &[String]) -> (FormattedValue, Duration) {
+        let start = Instant::now();
+        let target_nodes = self.filter_nodes_for_target(target);
+        let pattern = args.first().cloned().unwrap_or_else(|| "*".to_string());
+        let count: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(20);
+
+        match &self.backend {
+            XedisBackend::Live(_) | XedisBackend::LiveCluster(_) => {
+                let mut tasks = Vec::new();
+                for node in target_nodes {
+                    let node_url = Self::build_node_url(&self.target_url, &node.address);
+                    let pat = pattern.clone();
+                    tasks.push(async move {
+                        let node_start = Instant::now();
+                        match redis::Client::open(node_url.as_str()) {
+                            Ok(client) => match client.get_multiplexed_tokio_connection().await {
+                                Ok(mut conn) => {
+                                    let mut cursor: u64 = 0;
+                                    let mut all_keys = Vec::new();
+                                    loop {
+                                        let mut cmd = redis::cmd("SCAN");
+                                        cmd.arg(cursor).arg("MATCH").arg(&pat).arg("COUNT").arg(count.min(100));
+                                        if let Ok((next_cursor, keys)) = cmd.query_async::<(u64, Vec<String>)>(&mut conn).await {
+                                            all_keys.extend(keys);
+                                            cursor = next_cursor;
+                                            if cursor == 0 || all_keys.len() >= count {
+                                                break;
+                                            }
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    let json_val = serde_json::to_string_pretty(&all_keys).unwrap_or_default();
+                                    (node, FormattedValue::Json(json_val), node_start.elapsed())
+                                }
+                                Err(e) => (node, FormattedValue::Error(format!("Connection error: {}", e)), node_start.elapsed()),
+                            },
+                            Err(e) => (node, FormattedValue::Error(format!("Client error: {}", e)), node_start.elapsed()),
+                        }
+                    });
+                }
+
+                let results = futures_util::future::join_all(tasks).await;
+                let mut sections = Vec::new();
+                for (node, formatted, node_dur) in results {
+                    let header = Self::format_node_section_header(&node, node_dur);
+                    let body = formatted.to_display_text();
+                    sections.push(format!("{}\n{}", header, body.trim()));
+                }
+                (FormattedValue::String(sections.join("\n\n")), start.elapsed())
+            }
+            XedisBackend::DemoMock => {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                let mut sections = Vec::new();
+                for (idx, node) in target_nodes.iter().enumerate() {
+                    let simulated_duration = Duration::from_micros((node.ping_ms * 1000.0) as u64).max(Duration::from_micros(200));
+                    let header = Self::format_node_section_header(node, simulated_duration);
+                    let pat_clean = pattern.trim_end_matches('*').trim_end_matches(':');
+                    let mock_keys = vec![
+                        format!("{}:{}:{:03}", pat_clean, node.id, idx * 2 + 1),
+                        format!("{}:{}:{:03}", pat_clean, node.id, idx * 2 + 2),
+                    ];
+                    let json_val = serde_json::to_string_pretty(&mock_keys).unwrap_or_default();
+                    sections.push(format!("{}\n{}", header, json_val));
+                }
+                (FormattedValue::String(sections.join("\n\n")), start.elapsed())
             }
         }
     }
 
     pub async fn execute_macro(
         &mut self,
-        _target_node: Option<&str>,
+        target_node: Option<&str>,
         macro_name: &str,
         args: &[String],
     ) -> (FormattedValue, Duration) {
         let start = Instant::now();
         let name = macro_name.to_lowercase();
+
+        // 1. Check if broadcast scan is requested
+        if let Some(target) = target_node {
+            if Self::is_broadcast_target(target) && name == "/scan" {
+                return self.execute_broadcast_scan(target, args).await;
+            }
+        }
 
         match name.as_str() {
             "/scan" => {

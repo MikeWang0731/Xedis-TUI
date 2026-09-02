@@ -108,6 +108,49 @@ impl FormattedValue {
             _ => FormattedValue::String(format!("{:?}", val).replace(['\r', '\n'], " ")),
         }
     }
+
+    pub fn to_display_text(&self) -> String {
+        match self {
+            FormattedValue::Status(s) => s.clone(),
+            FormattedValue::Integer(i) => format!("(integer) {}", i),
+            FormattedValue::String(s) => s.clone(),
+            FormattedValue::Json(j) => j.clone(),
+            FormattedValue::List(l) => {
+                if l.is_empty() {
+                    "(empty list or set)".to_string()
+                } else {
+                    l.iter()
+                        .enumerate()
+                        .map(|(i, item)| format!("{}) \"{}\"", i + 1, item))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+            }
+            FormattedValue::Table { headers, rows } => {
+                let mut lines = Vec::new();
+                lines.push(headers.join(" | "));
+                for row in rows {
+                    lines.push(row.join(" | "));
+                }
+                lines.join("\n")
+            }
+            FormattedValue::Tree { root, items } => {
+                let mut lines = vec![root.clone()];
+                for (k, v) in items {
+                    lines.push(format!("  ├─ {}: {}", k, v));
+                }
+                lines.join("\n")
+            }
+            FormattedValue::Nil => "(nil)".to_string(),
+            FormattedValue::Error(e) => {
+                if e.starts_with("ERR") || e.starts_with("(error)") {
+                    e.clone()
+                } else {
+                    format!("ERR {}", e)
+                }
+            }
+        }
+    }
 }
 
 pub fn value_to_string(val: &Value) -> String {

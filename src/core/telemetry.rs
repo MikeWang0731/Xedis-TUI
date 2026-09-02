@@ -33,6 +33,8 @@ pub struct TelemetryMetrics {
     // CPU Metrics (Option-aware for Main vs Fork/Children)
     pub used_cpu_sys: Option<f64>,
     pub used_cpu_user: Option<f64>,
+    pub used_cpu_sys_main_thread: Option<f64>,
+    pub used_cpu_user_main_thread: Option<f64>,
     pub used_cpu_sys_children: Option<f64>,
     pub used_cpu_user_children: Option<f64>,
     pub cpu_sys_pct: Option<f64>,
@@ -40,6 +42,7 @@ pub struct TelemetryMetrics {
     pub cpu_children_sys_pct: Option<f64>,
     pub cpu_children_user_pct: Option<f64>,
     pub cpu_usage_pct: f64,
+    pub cpu_sample_elapsed_sec: f64,
 
     // Client & Keyspace Stats
     pub connected_clients: u64,
@@ -78,6 +81,8 @@ impl Default for TelemetryMetrics {
 
             used_cpu_sys: Some(1420.5),
             used_cpu_user: Some(890.2),
+            used_cpu_sys_main_thread: Some(1420.5),
+            used_cpu_user_main_thread: Some(890.2),
             used_cpu_sys_children: None,
             used_cpu_user_children: None,
             cpu_sys_pct: Some(2.8),
@@ -85,6 +90,7 @@ impl Default for TelemetryMetrics {
             cpu_children_sys_pct: None,
             cpu_children_user_pct: None,
             cpu_usage_pct: 8.4,
+            cpu_sample_elapsed_sec: 0.0,
 
             connected_clients: 342,
             blocked_clients: 0,
@@ -124,6 +130,8 @@ impl TelemetryMetrics {
 
             used_cpu_sys: None,
             used_cpu_user: None,
+            used_cpu_sys_main_thread: None,
+            used_cpu_user_main_thread: None,
             used_cpu_sys_children: None,
             used_cpu_user_children: None,
             cpu_sys_pct: None,
@@ -131,6 +139,7 @@ impl TelemetryMetrics {
             cpu_children_sys_pct: None,
             cpu_children_user_pct: None,
             cpu_usage_pct: 0.0,
+            cpu_sample_elapsed_sec: 0.0,
 
             connected_clients: 0,
             blocked_clients: 0,
@@ -485,6 +494,16 @@ impl TelemetryParser {
                     }
 
                     // CPU
+                    "used_cpu_sys_main_thread" | "cpu_sys_main_thread" | "cpu_sys_main" => {
+                        if let Some(sys_m) = Self::parse_flexible_f64(v) {
+                            metrics.used_cpu_sys_main_thread = Some(sys_m);
+                        }
+                    }
+                    "used_cpu_user_main_thread" | "cpu_user_main_thread" | "cpu_user_main" => {
+                        if let Some(user_m) = Self::parse_flexible_f64(v) {
+                            metrics.used_cpu_user_main_thread = Some(user_m);
+                        }
+                    }
                     "used_cpu_sys" | "cpu_sys" | "cpu_system" | "sys_cpu" => {
                         if let Some(sys) = Self::parse_flexible_f64(v) {
                             metrics.used_cpu_sys = Some(sys);
@@ -550,7 +569,7 @@ impl TelemetryParser {
             metrics.expires_keys = total_expires_acc;
         }
 
-        // Calculate CPU percentage
+        // Calculate CPU percentage with Delta Window Compensation & EMA Smoothing
         if let Some(prev_m) = prev {
             if elapsed_sec > 0.05 {
                 let sys_diff = match (metrics.used_cpu_sys, prev_m.used_cpu_sys) {
@@ -561,11 +580,29 @@ impl TelemetryParser {
                     (Some(curr), Some(p)) => (curr - p).max(0.0),
                     _ => 0.0,
                 };
-                let sys_pct = (sys_diff / elapsed_sec) * 100.0;
-                let user_pct = (user_diff / elapsed_sec) * 100.0;
-                metrics.cpu_sys_pct = Some(sys_pct);
-                metrics.cpu_user_pct = Some(user_pct);
-                metrics.cpu_usage_pct = (sys_pct + user_pct).clamp(0.0, 100.0);
+
+                let total_cpu_diff = sys_diff + user_diff;
+                let accumulated_time = prev_m.cpu_sample_elapsed_sec + elapsed_sec;
+
+                let (raw_sys_pct, raw_user_pct, raw_total_pct) = if total_cpu_diff > 0.00001 {
+                    // Counter changed! Compute rate using accumulated elapsed window
+                    let effective_sec = accumulated_time.max(elapsed_sec);
+                    metrics.cpu_sample_elapsed_sec = 0.0;
+                    let sys_pct = (sys_diff / effective_sec) * 100.0;
+                    let user_pct = (user_diff / effective_sec) * 100.0;
+                    let total_pct = (sys_pct + user_pct).clamp(0.0, 100.0);
+                    (sys_pct, user_pct, total_pct)
+                } else {
+                    // Counter unchanged: accumulate time window across silent intervals
+                    metrics.cpu_sample_elapsed_sec = accumulated_time;
+                    (0.0, 0.0, 0.0)
+                };
+
+                if metrics.used_cpu_sys.is_some() || metrics.used_cpu_user.is_some() {
+                    metrics.cpu_sys_pct = Some((raw_sys_pct * 10.0).round() / 10.0);
+                    metrics.cpu_user_pct = Some((raw_user_pct * 10.0).round() / 10.0);
+                    metrics.cpu_usage_pct = (raw_total_pct * 10.0).round() / 10.0;
+                }
 
                 if metrics.used_cpu_sys_children.is_some() || metrics.used_cpu_user_children.is_some() {
                     let sys_c_diff = match (metrics.used_cpu_sys_children, prev_m.used_cpu_sys_children) {
@@ -576,8 +613,10 @@ impl TelemetryParser {
                         (Some(curr), Some(p)) => (curr - p).max(0.0),
                         _ => 0.0,
                     };
-                    metrics.cpu_children_sys_pct = Some((sys_c_diff / elapsed_sec) * 100.0);
-                    metrics.cpu_children_user_pct = Some((user_c_diff / elapsed_sec) * 100.0);
+                    let raw_c_sys = (sys_c_diff / elapsed_sec) * 100.0;
+                    let raw_c_user = (user_c_diff / elapsed_sec) * 100.0;
+                    metrics.cpu_children_sys_pct = Some((raw_c_sys * 10.0).round() / 10.0);
+                    metrics.cpu_children_user_pct = Some((raw_c_user * 10.0).round() / 10.0);
                 }
 
                 if parsed_instantaneous_ops.is_none() || parsed_instantaneous_ops == Some(0) {
@@ -659,5 +698,71 @@ impl TelemetryParser {
         } else {
             n.to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_main_thread_cpu_parsing() {
+        let info_str = r#"
+# CPU
+used_cpu_sys: 2.563428
+used_cpu_user: 6.486121
+used_cpu_sys_children: 0.000000
+used_cpu_user_children: 0.000000
+used_cpu_sys_main_thread: 2.563428
+used_cpu_user_main_thread: 6.486121
+"#;
+        let metrics = TelemetryParser::parse_info(info_str, None, 1.0);
+        assert_eq!(metrics.used_cpu_sys, Some(2.563428));
+        assert_eq!(metrics.used_cpu_user, Some(6.486121));
+        assert_eq!(metrics.used_cpu_sys_main_thread, Some(2.563428));
+        assert_eq!(metrics.used_cpu_user_main_thread, Some(6.486121));
+    }
+
+    #[test]
+    fn test_stepped_cpu_counter_spike_elimination() {
+        // Step 0: Initial baseline
+        let info_init = "used_cpu_sys: 2.0\nused_cpu_user: 5.0\n";
+        let mut m = TelemetryParser::parse_info(info_init, None, 1.0);
+
+        // Step 1 to 4: Server counters remain unchanged for 4 seconds (low-frequency refresh)
+        for _ in 0..4 {
+            m = TelemetryParser::parse_info(info_init, Some(&m), 1.0);
+            assert!(m.cpu_usage_pct <= 10.0);
+        }
+
+        // Verify accumulated elapsed window is around 4.0s
+        assert_eq!(m.cpu_sample_elapsed_sec, 4.0);
+
+        // Step 5: Server suddenly updates counter by +0.3s (0.1s sys, 0.2s user) over 5 total seconds
+        // Real average CPU load = 0.3s / 5.0s = 6.0%
+        // Without window compensation, raw 1s diff would be 0.3s / 1.0s = 30.0% or higher
+        let info_step5 = "used_cpu_sys: 2.1\nused_cpu_user: 5.2\n";
+        let m5 = TelemetryParser::parse_info(info_step5, Some(&m), 1.0);
+
+        // CPU window was reset and usage percentage is appropriately smoothed
+        assert_eq!(m5.cpu_sample_elapsed_sec, 0.0);
+        assert!(m5.cpu_usage_pct < 10.0, "Expected smoothed CPU < 10.0%, got {}", m5.cpu_usage_pct);
+        assert!(m5.cpu_usage_pct > 0.0);
+    }
+
+    #[test]
+    fn test_continuous_cpu_smoothing() {
+        let mut m = TelemetryParser::parse_info("used_cpu_sys: 10.0\nused_cpu_user: 20.0\n", None, 1.0);
+        
+        // Feed 10% CPU load continuously every second (0.04s sys, 0.06s user)
+        for i in 1..=5 {
+            let sys = 10.0 + (i as f64) * 0.04;
+            let user = 20.0 + (i as f64) * 0.06;
+            let info = format!("used_cpu_sys: {:.4}\nused_cpu_user: {:.4}\n", sys, user);
+            m = TelemetryParser::parse_info(&info, Some(&m), 1.0);
+        }
+
+        // Should converge towards 10.0%
+        assert!((m.cpu_usage_pct - 10.0).abs() < 2.0, "Expected CPU around 10.0%, got {}", m.cpu_usage_pct);
     }
 }
