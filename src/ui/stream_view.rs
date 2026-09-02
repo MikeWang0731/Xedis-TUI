@@ -1,7 +1,8 @@
 use crate::backend::formatter::FormattedValue;
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
     Frame,
@@ -29,6 +30,7 @@ impl StreamView {
         scroll_offset: usize,
         is_focused: bool,
         is_dimmed: bool,
+        theme: &ThemePalette,
     ) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -41,18 +43,18 @@ impl StreamView {
         // 1. Stream Card Block
         let (border_style, title_style) = if is_dimmed {
             (
-                Style::default().fg(Color::Rgb(40, 50, 60)),
-                Style::default().fg(Color::Rgb(80, 95, 110)),
+                Style::default().fg(theme.stream_border_dimmed),
+                Style::default().fg(theme.text_dimmed),
             )
         } else if is_focused {
             (
-                Style::default().fg(Color::Cyan),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.stream_border_focused),
+                Style::default().fg(theme.stream_border_focused).add_modifier(Modifier::BOLD),
             )
         } else {
             (
-                Style::default().fg(Color::DarkGray),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.stream_border_unfocused),
+                Style::default().fg(theme.stream_border_unfocused),
             )
         };
 
@@ -79,13 +81,13 @@ impl StreamView {
         let end_line = (start_line + visible_height).min(total_lines);
 
         let visible_lines: Vec<ListItem> = if records.is_empty() {
-            let welcome = Self::render_welcome_banner(max_w);
+            let welcome = Self::render_welcome_banner(max_w, theme);
             let sliced = if start_line < welcome.len() {
                 let end = (start_line + visible_height).min(welcome.len());
                 welcome[start_line..end]
                     .iter()
                     .cloned()
-                    .map(|l| if is_dimmed { Self::dim_line(l) } else { l })
+                    .map(|l| if is_dimmed { Self::dim_line(l, theme) } else { l })
                     .map(ListItem::new)
                     .collect()
             } else {
@@ -93,7 +95,7 @@ impl StreamView {
             };
             sliced
         } else {
-            Self::render_virtual_lines(records, start_line, end_line, max_w, is_dimmed)
+            Self::render_virtual_lines(records, start_line, end_line, max_w, is_dimmed, theme)
                 .into_iter()
                 .map(ListItem::new)
                 .collect()
@@ -104,9 +106,9 @@ impl StreamView {
 
         // 2. Prompt / Input Bar
         let prompt_border = if is_focused {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(theme.prompt_border_focused)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.prompt_border_unfocused)
         };
 
         let input_block = Block::default()
@@ -115,15 +117,15 @@ impl StreamView {
             .border_style(prompt_border)
             .title(Span::styled(
                 " Prompt (Commands, / Macros, @ Node Routing, Tab Autocomplete) ",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.prompt_border_focused).add_modifier(Modifier::BOLD),
             ));
 
         let input_inner = input_block.inner(input_area);
         f.render_widget(input_block, input_area);
 
         let input_text = Paragraph::new(Line::from(vec![
-            Span::styled("❯ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(input, Style::default().fg(Color::White)),
+            Span::styled("❯ ", Style::default().fg(theme.prompt_symbol).add_modifier(Modifier::BOLD)),
+            Span::styled(input, Style::default().fg(theme.prompt_input)),
         ]));
         f.render_widget(input_text, input_inner);
 
@@ -143,6 +145,7 @@ impl StreamView {
         end_line: usize,
         max_width: u16,
         is_dimmed: bool,
+        theme: &ThemePalette,
     ) -> Vec<Line<'static>> {
         if start_line >= end_line || records.is_empty() {
             return Vec::new();
@@ -157,7 +160,7 @@ impl StreamView {
 
             // Check if this record intersects with [start_line, end_line)
             if record_end_offset > start_line && current_line_offset < end_line {
-                let card_lines = Self::render_single_record(record, idx > 0, max_width);
+                let card_lines = Self::render_single_record(record, idx > 0, max_width, theme);
 
                 let rec_start = if start_line > current_line_offset {
                     start_line - current_line_offset
@@ -175,7 +178,7 @@ impl StreamView {
                     let safe_end = rec_end.min(card_lines.len());
                     for line in &card_lines[rec_start..safe_end] {
                         if is_dimmed {
-                            result_lines.push(Self::dim_line(line.clone()));
+                            result_lines.push(Self::dim_line(line.clone(), theme));
                         } else {
                             result_lines.push(line.clone());
                         }
@@ -192,7 +195,7 @@ impl StreamView {
         result_lines
     }
 
-    pub fn render_welcome_banner(max_width: u16) -> Vec<Line<'static>> {
+    pub fn render_welcome_banner(max_width: u16, theme: &ThemePalette) -> Vec<Line<'static>> {
         let w = (max_width as usize).saturating_sub(4);
         let mut lines = Vec::new();
         lines.push(Line::from(""));
@@ -200,96 +203,98 @@ impl StreamView {
         // Header Title
         if w >= 75 {
             lines.push(Line::from(vec![
-                Span::styled(" [XEDIS] ", Style::default().bg(Color::Rgb(15, 45, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(" Welcome to Xedis-TUI", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(" · Terminal Workbench for Redis & Custom Middleware", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled(" [XEDIS] ", Style::default().bg(theme.brand_bg).fg(theme.brand_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Welcome to Xedis-TUI", Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" · Terminal Workbench for Redis & Custom Middleware", Style::default().fg(theme.text_secondary)),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled(" [XEDIS] ", Style::default().bg(Color::Rgb(15, 45, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(" Welcome to Xedis-TUI", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" [XEDIS] ", Style::default().bg(theme.brand_bg).fg(theme.brand_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Welcome to Xedis-TUI", Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("   "),
-                Span::styled("Terminal Workbench for Redis & Custom Middleware", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled("Terminal Workbench for Redis & Custom Middleware", Style::default().fg(theme.text_secondary)),
             ]));
         }
         lines.push(Line::from(""));
 
         // Section header
         lines.push(Line::from(vec![
-            Span::styled(" Quick Start & Tips:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" Quick Start & Tips:", Style::default().fg(theme.help_title_yellow).add_modifier(Modifier::BOLD)),
         ]));
 
         // Tip 1: Commands
         if w >= 80 {
             lines.push(Line::from(vec![
-                Span::styled("  • Command:     ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled("Type any Redis command (e.g. ", Style::default().fg(Color::DarkGray)),
-                Span::styled("PING", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("INFO", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("GET <key>", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("SET <k> <v>", Style::default().fg(Color::Cyan)),
-                Span::styled(") and press Enter", Style::default().fg(Color::DarkGray)),
+                Span::styled("  • Command:     ", Style::default().fg(theme.text_secondary)),
+                Span::styled("Type any Redis command (e.g. ", Style::default().fg(theme.text_muted)),
+                Span::styled("PING", Style::default().fg(theme.cmd_name_native)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("INFO", Style::default().fg(theme.cmd_name_native)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("GET <key>", Style::default().fg(theme.cmd_name_native)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("SET <k> <v>", Style::default().fg(theme.cmd_name_native)),
+                Span::styled(") and press Enter", Style::default().fg(theme.text_muted)),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled("  • Command: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled("PING", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("INFO", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("GET <key>", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("SET <k> <v>", Style::default().fg(Color::Cyan)),
+                Span::styled("  • Command: ", Style::default().fg(theme.cmd_name_native).add_modifier(Modifier::BOLD)),
+                Span::styled("PING", Style::default().fg(theme.cmd_name_native)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("INFO", Style::default().fg(theme.cmd_name_native)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("GET <key>", Style::default().fg(theme.cmd_name_native)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("SET <k> <v>", Style::default().fg(theme.cmd_name_native)),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled("Type any command and press Enter to execute", Style::default().fg(Color::DarkGray)),
+                Span::styled("Type any command and press Enter to execute", Style::default().fg(theme.text_muted)),
             ]));
         }
 
         // Tip 2: Macros
         if w >= 75 {
             lines.push(Line::from(vec![
-                Span::styled("  • Macros:      ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled("Type ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/scan", Style::default().fg(Color::Yellow)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/bigkeys", Style::default().fg(Color::Green)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/interval", Style::default().fg(Color::Cyan)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/clear", Style::default().fg(Color::Rgb(180, 160, 255))),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/help", Style::default().fg(Color::Yellow)),
+                Span::styled("  • Macros:      ", Style::default().fg(theme.text_secondary)),
+                Span::styled("Type ", Style::default().fg(theme.text_muted)),
+                Span::styled("/scan", Style::default().fg(theme.help_title_yellow)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/bigkeys", Style::default().fg(theme.val_key)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/theme", Style::default().fg(theme.help_title_cyan)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/interval", Style::default().fg(theme.help_title_purple)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/clear", Style::default().fg(theme.text_muted)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/help", Style::default().fg(theme.help_title_yellow)),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled("  • Macros:  ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled("/scan", Style::default().fg(Color::Yellow)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/bigkeys", Style::default().fg(Color::Green)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/slowlog", Style::default().fg(Color::Yellow)),
-                Span::styled(", ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/help", Style::default().fg(Color::Yellow)),
+                Span::styled("  • Macros:  ", Style::default().fg(theme.help_title_yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("/scan", Style::default().fg(theme.help_title_yellow)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/theme", Style::default().fg(theme.help_title_cyan)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/slowlog", Style::default().fg(theme.help_title_yellow)),
+                Span::styled(", ", Style::default().fg(theme.text_muted)),
+                Span::styled("/help", Style::default().fg(theme.help_title_yellow)),
             ]));
         }
 
         // Tip 3: Navigation
         if w >= 88 {
             lines.push(Line::from(vec![
-                Span::styled("  • Navigation:  ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled("[Tab] Focus Pane · [F1] Handbook · [F2~F4] Dashboard · [F5] Layout · [PageUp/Dn] Scroll", Style::default().fg(Color::DarkGray)),
+                Span::styled("  • Navigation:  ", Style::default().fg(theme.text_secondary)),
+                Span::styled("[Tab] Focus Pane · [F1] Handbook · [F2~F4] Dashboard · [F5] Layout · [PageUp/Dn] Scroll", Style::default().fg(theme.text_muted)),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled("  • Navigation: ", Style::default().fg(Color::Cyan)),
-                Span::styled("[Tab] Focus · [F1] Handbook · [F5] Layout · [F2~F4] Dash", Style::default().fg(Color::DarkGray)),
+                Span::styled("  • Navigation: ", Style::default().fg(theme.cmd_name_native)),
+                Span::styled("[Tab] Focus · [F1] Handbook · [F5] Layout · [F2~F4] Dash", Style::default().fg(theme.text_muted)),
             ]));
         }
 
@@ -342,7 +347,7 @@ impl StreamView {
 
     pub fn total_lines_count(records: &[ExecutionRecord], max_width: u16) -> usize {
         if records.is_empty() {
-            return Self::render_welcome_banner(max_width).len();
+            return Self::render_welcome_banner(max_width, &ThemePalette::dark()).len();
         }
         let mut count = 0;
         for (idx, record) in records.iter().enumerate() {
@@ -363,6 +368,7 @@ impl StreamView {
         record: &ExecutionRecord,
         has_separator: bool,
         max_width: u16,
+        theme: &ThemePalette,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         if has_separator {
@@ -375,9 +381,9 @@ impl StreamView {
         let mut header_spans = Vec::new();
         if let Some(node) = &record.target_node {
             let (bg_col, fg_col) = if node == "all" || node == "cluster" {
-                (Color::Rgb(60, 20, 70), Color::Rgb(255, 180, 255))
+                (theme.cmd_broadcast_bg, theme.cmd_broadcast_fg)
             } else {
-                (Color::Rgb(40, 30, 80), Color::Rgb(180, 160, 255))
+                (theme.cmd_node_bg, theme.cmd_node_fg)
             };
             header_spans.push(Span::styled(
                 format!(" @{} ", node),
@@ -386,15 +392,15 @@ impl StreamView {
         } else {
             header_spans.push(Span::styled(
                 " DIRECT ",
-                Style::default().bg(Color::Rgb(20, 50, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default().bg(theme.cmd_direct_bg).fg(theme.cmd_direct_fg).add_modifier(Modifier::BOLD),
             ));
         }
         header_spans.push(Span::raw(" "));
 
         let cmd_color = if record.command.trim_start().starts_with('/') {
-            Color::Yellow
+            theme.cmd_name_macro
         } else {
-            Color::Cyan
+            theme.cmd_name_native
         };
 
         header_spans.push(Span::styled(
@@ -415,7 +421,7 @@ impl StreamView {
 
         header_spans.push(Span::styled(
             format!("  [{} · {}]", record.timestamp, elapsed_str),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.cmd_meta),
         ));
 
         lines.push(Line::from(header_spans));
@@ -425,13 +431,13 @@ impl StreamView {
             FormattedValue::Status(s) => {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(s.clone(), Style::default().fg(Color::Rgb(16, 185, 129)).add_modifier(Modifier::BOLD)),
+                    Span::styled(s.clone(), Style::default().fg(theme.val_status).add_modifier(Modifier::BOLD)),
                 ]));
             }
             FormattedValue::Integer(i) => {
                 lines.push(Line::from(vec![
-                    Span::raw("  (integer) "),
-                    Span::styled(i.to_string(), Style::default().fg(Color::Rgb(100, 200, 255))),
+                    Span::styled("  (integer) ", Style::default().fg(theme.text_secondary)),
+                    Span::styled(i.to_string(), Style::default().fg(theme.val_integer)),
                 ]));
             }
             FormattedValue::String(s) => {
@@ -441,12 +447,12 @@ impl StreamView {
                     if trimmed.starts_with("--- Node:") {
                         lines.push(Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(line.to_string(), Style::default().fg(Color::Rgb(180, 160, 255)).add_modifier(Modifier::BOLD)),
+                            Span::styled(line.to_string(), Style::default().fg(theme.val_node_header).add_modifier(Modifier::BOLD)),
                         ]));
                     } else if trimmed.starts_with('#') {
                         lines.push(Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(line.to_string(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                            Span::styled(line.to_string(), Style::default().fg(theme.val_info_section).add_modifier(Modifier::BOLD)),
                         ]));
                     } else if let Some((k, v)) = line.split_once(':') {
                         let total_len = line.len();
@@ -456,21 +462,21 @@ impl StreamView {
                                 if ci == 0 {
                                     lines.push(Line::from(vec![
                                         Span::raw("  "),
-                                        Span::styled(format!("{}:", k), Style::default().fg(Color::Green)),
-                                        Span::styled(format!(" {}", chunk), Style::default().fg(Color::White)),
+                                        Span::styled(format!("{}:", k), Style::default().fg(theme.val_key)),
+                                        Span::styled(format!(" {}", chunk), Style::default().fg(theme.val_string)),
                                     ]));
                                 } else {
                                     lines.push(Line::from(vec![
                                         Span::raw("    "),
-                                        Span::styled(chunk.clone(), Style::default().fg(Color::White)),
+                                        Span::styled(chunk.clone(), Style::default().fg(theme.val_string)),
                                     ]));
                                 }
                             }
                         } else {
                             lines.push(Line::from(vec![
                                 Span::raw("  "),
-                                Span::styled(format!("{}:", k), Style::default().fg(Color::Green)),
-                                Span::styled(format!(" {}", v), Style::default().fg(Color::White)),
+                                Span::styled(format!("{}:", k), Style::default().fg(theme.val_key)),
+                                Span::styled(format!(" {}", v), Style::default().fg(theme.val_string)),
                             ]));
                         }
                     } else {
@@ -478,7 +484,7 @@ impl StreamView {
                         for chunk in chunks {
                             lines.push(Line::from(vec![
                                 Span::raw("  "),
-                                Span::styled(chunk, Style::default().fg(Color::White)),
+                                Span::styled(chunk, Style::default().fg(theme.val_string)),
                             ]));
                         }
                     }
@@ -488,27 +494,27 @@ impl StreamView {
                 for line in json_str.lines() {
                     let chunks = Self::chunk_string(line, avail_w.saturating_sub(4));
                     for chunk in chunks {
-                        lines.push(Self::syntax_highlight_json_line(&chunk));
+                        lines.push(Self::syntax_highlight_json_line(&chunk, theme));
                     }
                 }
             }
             FormattedValue::Table { headers, rows } => {
-                let table_lines = Self::render_adaptive_table(headers, rows, max_width);
+                let table_lines = Self::render_adaptive_table(headers, rows, max_width, theme);
                 lines.extend(table_lines);
             }
             FormattedValue::Tree { root, items } => {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled("[Tree] ", Style::default().fg(Color::Yellow)),
-                    Span::styled(root.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("[Tree] ", Style::default().fg(theme.val_tree_tag)),
+                    Span::styled(root.clone(), Style::default().fg(theme.val_tree_root).add_modifier(Modifier::BOLD)),
                 ]));
                 for (i, (k, v)) in items.iter().enumerate() {
                     let is_last = i == items.len() - 1;
                     let branch = if is_last { "  └── " } else { "  ├── " };
                     lines.push(Line::from(vec![
-                        Span::styled(branch, Style::default().fg(Color::DarkGray)),
-                        Span::styled(format!("{}: ", k), Style::default().fg(Color::Green)),
-                        Span::styled(v.clone(), Style::default().fg(Color::White)),
+                        Span::styled(branch, Style::default().fg(theme.val_tree_branch)),
+                        Span::styled(format!("{}: ", k), Style::default().fg(theme.val_key)),
+                        Span::styled(v.clone(), Style::default().fg(theme.val_string)),
                     ]));
                 }
             }
@@ -518,13 +524,13 @@ impl StreamView {
                     for (ci, chunk) in chunks.iter().enumerate() {
                         if ci == 0 {
                             lines.push(Line::from(vec![
-                                Span::styled(format!("  {:>2}) ", i + 1), Style::default().fg(Color::DarkGray)),
-                                Span::styled(chunk.clone(), Style::default().fg(Color::White)),
+                                Span::styled(format!("  {:>2}) ", i + 1), Style::default().fg(theme.text_muted)),
+                                Span::styled(chunk.clone(), Style::default().fg(theme.val_string)),
                             ]));
                         } else {
                             lines.push(Line::from(vec![
                                 Span::raw("      "),
-                                Span::styled(chunk.clone(), Style::default().fg(Color::White)),
+                                Span::styled(chunk.clone(), Style::default().fg(theme.val_string)),
                             ]));
                         }
                     }
@@ -533,7 +539,7 @@ impl StreamView {
             FormattedValue::Nil => {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled("(nil)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                    Span::styled("(nil)", Style::default().fg(theme.val_nil).add_modifier(Modifier::ITALIC)),
                 ]));
             }
             FormattedValue::Error(err) => {
@@ -541,7 +547,7 @@ impl StreamView {
                 for chunk in chunks {
                     lines.push(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled(chunk, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::styled(chunk, Style::default().fg(theme.val_error).add_modifier(Modifier::BOLD)),
                     ]));
                 }
             }
@@ -564,64 +570,53 @@ impl StreamView {
         result
     }
 
-    pub fn dim_line<'a>(line: Line<'a>) -> Line<'a> {
+    pub fn dim_line<'a>(line: Line<'a>, theme: &ThemePalette) -> Line<'a> {
         let dimmed_spans: Vec<Span<'a>> = line
             .spans
             .into_iter()
             .map(|mut span| {
-                let fg = span.style.fg.unwrap_or(Color::White);
-                let dimmed_fg = match fg {
-                    Color::Cyan | Color::Rgb(100, 200, 255) => Color::Rgb(60, 90, 100),
-                    Color::Green | Color::Rgb(16, 185, 129) => Color::Rgb(50, 90, 60),
-                    Color::Yellow | Color::Rgb(245, 158, 11) => Color::Rgb(100, 90, 50),
-                    Color::Red | Color::Rgb(239, 68, 68) => Color::Rgb(110, 50, 50),
-                    Color::Rgb(180, 160, 255) | Color::Rgb(147, 112, 219) => Color::Rgb(80, 70, 110),
-                    Color::White => Color::Rgb(100, 105, 110),
-                    Color::DarkGray | Color::Gray => Color::Rgb(50, 55, 60),
-                    _ => Color::Rgb(65, 70, 75),
-                };
-                span.style = Style::default().fg(dimmed_fg);
+                span.style = Style::default().fg(theme.text_dimmed);
                 span
             })
             .collect();
         Line::from(dimmed_spans)
     }
 
-    fn syntax_highlight_json_line(line: &str) -> Line<'static> {
+    fn syntax_highlight_json_line(line: &str, theme: &ThemePalette) -> Line<'static> {
         let mut spans = vec![Span::raw("  ")];
 
         if let Some(colon_idx) = line.find(':') {
             let key_part = line[..colon_idx].to_string();
             let val_part = line[colon_idx + 1..].to_string();
 
-            spans.push(Span::styled(key_part, Style::default().fg(Color::Cyan)));
-            spans.push(Span::styled(":", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(key_part, Style::default().fg(theme.json_key)));
+            spans.push(Span::styled(":", Style::default().fg(theme.json_colon)));
 
             let trimmed_val = val_part.trim();
             if trimmed_val.starts_with('"') {
-                spans.push(Span::styled(val_part, Style::default().fg(Color::Green)));
+                spans.push(Span::styled(val_part, Style::default().fg(theme.json_string)));
             } else if trimmed_val.parse::<f64>().is_ok() {
-                spans.push(Span::styled(val_part, Style::default().fg(Color::Rgb(100, 200, 255))));
+                spans.push(Span::styled(val_part, Style::default().fg(theme.json_number)));
             } else if trimmed_val == "true" || trimmed_val == "false" || trimmed_val == "null" {
-                spans.push(Span::styled(val_part, Style::default().fg(Color::Yellow)));
+                spans.push(Span::styled(val_part, Style::default().fg(theme.json_boolean)));
             } else {
-                spans.push(Span::styled(val_part, Style::default().fg(Color::White)));
+                spans.push(Span::styled(val_part, Style::default().fg(theme.val_string)));
             }
         } else {
             let trimmed = line.trim();
             if trimmed.starts_with('"') {
-                spans.push(Span::styled(line.to_string(), Style::default().fg(Color::Green)));
+                spans.push(Span::styled(line.to_string(), Style::default().fg(theme.json_string)));
             } else if trimmed == "{" || trimmed == "}" || trimmed == "[" || trimmed == "]" || trimmed == "}," || trimmed == "]," {
-                spans.push(Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(line.to_string(), Style::default().fg(theme.json_bracket)));
             } else {
-                spans.push(Span::styled(line.to_string(), Style::default().fg(Color::White)));
+                spans.push(Span::styled(line.to_string(), Style::default().fg(theme.val_string)));
             }
         }
 
         Line::from(spans)
     }
 
-    fn render_adaptive_table(headers: &[String], rows: &[Vec<String>], max_width: u16) -> Vec<Line<'static>> {
+    fn render_adaptive_table(headers: &[String], rows: &[Vec<String>], max_width: u16, theme: &ThemePalette) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let num_cols = headers.len();
         if num_cols == 0 {
@@ -658,10 +653,10 @@ impl StreamView {
                 top_border.push('┐');
             }
         }
-        lines.push(Line::from(Span::styled(top_border, Style::default().fg(Color::DarkGray))));
+        lines.push(Line::from(Span::styled(top_border, Style::default().fg(theme.table_border))));
 
         // Header Row: │ Header 1 │ Header 2 │
-        let mut h_spans = vec![Span::styled("  │", Style::default().fg(Color::DarkGray))];
+        let mut h_spans = vec![Span::styled("  │", Style::default().fg(theme.table_border))];
         for (i, h) in headers.iter().enumerate() {
             let w = col_widths[i];
             let truncated = if h.len() > w {
@@ -671,9 +666,9 @@ impl StreamView {
             };
             h_spans.push(Span::styled(
                 format!(" {:<width$} ", truncated, width = w),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.table_header).add_modifier(Modifier::BOLD),
             ));
-            h_spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+            h_spans.push(Span::styled("│", Style::default().fg(theme.table_border)));
         }
         lines.push(Line::from(h_spans));
 
@@ -687,11 +682,11 @@ impl StreamView {
                 mid_border.push('┤');
             }
         }
-        lines.push(Line::from(Span::styled(mid_border, Style::default().fg(Color::DarkGray))));
+        lines.push(Line::from(Span::styled(mid_border, Style::default().fg(theme.table_border))));
 
         // Data Rows
         for row in rows {
-            let mut r_spans = vec![Span::styled("  │", Style::default().fg(Color::DarkGray))];
+            let mut r_spans = vec![Span::styled("  │", Style::default().fg(theme.table_border))];
             for (i, w) in col_widths.iter().enumerate() {
                 let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
                 let truncated = if cell.len() > *w {
@@ -700,15 +695,15 @@ impl StreamView {
                     cell.to_string()
                 };
                 let cell_col = match i {
-                    0 => Color::Green,
-                    1 => Color::Yellow,
-                    _ => Color::White,
+                    0 => theme.table_col1,
+                    1 => theme.table_col2,
+                    _ => theme.table_col_rest,
                 };
                 r_spans.push(Span::styled(
                     format!(" {:<width$} ", truncated, width = *w),
                     Style::default().fg(cell_col),
                 ));
-                r_spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+                r_spans.push(Span::styled("│", Style::default().fg(theme.table_border)));
             }
             lines.push(Line::from(r_spans));
         }
@@ -723,7 +718,7 @@ impl StreamView {
                 bot_border.push('┘');
             }
         }
-        lines.push(Line::from(Span::styled(bot_border, Style::default().fg(Color::DarkGray))));
+        lines.push(Line::from(Span::styled(bot_border, Style::default().fg(theme.table_border))));
 
         lines
     }

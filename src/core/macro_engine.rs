@@ -50,6 +50,12 @@ impl MacroEngine {
             example: "/clients",
         },
         MacroDescriptor {
+            name: "/theme",
+            signature: "/theme [dark|light|toggle]",
+            description: "切换界面深色 / 浅色配色主题 (Dark / Light Theme)",
+            example: "/theme light",
+        },
+        MacroDescriptor {
             name: "/help",
             signature: "/help",
             description: "查看全部快捷宏与键盘快捷键指南",
@@ -225,11 +231,38 @@ impl MacroEngine {
         FormattedValue::Table { headers, rows }
     }
 
+    pub fn format_theme_result(old_theme: &str, new_theme: &str) -> FormattedValue {
+        let headers = vec![
+            "Setting".to_string(),
+            "Current Theme".to_string(),
+            "Status".to_string(),
+            "Available Themes".to_string(),
+        ];
+
+        let status_str = if old_theme.eq_ignore_ascii_case(new_theme) {
+            format!("[ACTIVE] Theme already set to {}", new_theme)
+        } else {
+            format!("[SWITCHED] Switched from {} to {}", old_theme, new_theme)
+        };
+
+        let rows = vec![
+            vec![
+                "UI Color Theme".to_string(),
+                new_theme.to_string(),
+                status_str,
+                "dark | light | toggle (/theme [mode])".to_string(),
+            ],
+        ];
+
+        FormattedValue::Table { headers, rows }
+    }
+
     pub fn format_settings(
         host: &str,
         port: u16,
         is_cluster: bool,
         layout_name: &str,
+        theme_name: &str,
         interval_ms: u64,
         is_paused: bool,
     ) -> FormattedValue {
@@ -252,6 +285,7 @@ impl MacroEngine {
             vec!["Server Address".to_string(), format!("{}:{}", host, port), "Target Redis connection endpoint".to_string()],
             vec!["Protocol Mode".to_string(), mode_str.to_string(), "Standalone single-node or distributed Cluster topology".to_string()],
             vec!["Layout Preset".to_string(), layout_name.to_string(), "Current viewport split ratio (toggle via F5 / Ctrl+B)".to_string()],
+            vec!["UI Color Theme".to_string(), theme_name.to_string(), "Active color palette: Dark / Light (/theme [mode])".to_string()],
             vec!["Telemetry Polling".to_string(), poll_str, "Sampling interval for QPS, CPU, Memory, Slowlog (/interval [val])".to_string()],
             vec!["Config Path".to_string(), "~/.config/xedis/config.toml".to_string(), "Persistent configuration file on local machine".to_string()],
         ];

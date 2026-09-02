@@ -39,6 +39,10 @@ struct CliArgs {
     /// Initial layout preset (balanced, focus, monitor, zen)
     #[arg(long, value_enum, default_value = "balanced")]
     preset: Option<String>,
+
+    /// Color theme (dark, light)
+    #[arg(long, default_value = "dark")]
+    theme: Option<String>,
 }
 
 #[tokio::main]
@@ -58,6 +62,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "zen" => LayoutPreset::Zen,
             _ => LayoutPreset::Balanced,
         };
+    }
+
+    if let Some(theme_str) = args.theme {
+        match theme_str.to_lowercase().as_str() {
+            "light" => config.theme = ui::theme::ThemeMode::Light,
+            "dark" => config.theme = ui::theme::ThemeMode::Dark,
+            _ => {}
+        }
     }
 
     // Setup terminal and custom panic hook to prevent garbled terminal

@@ -1,7 +1,8 @@
 use crate::backend::TelemetryData;
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
@@ -10,14 +11,10 @@ use ratatui::{
 pub struct TelemetryView;
 
 impl TelemetryView {
-    // High-legibility slate gray/off-white for label items (RSS, Clients, Keys, etc.)
-    const LABEL_COLOR: Color = Color::Rgb(165, 180, 195);
-    const DIVIDER_COLOR: Color = Color::Rgb(90, 105, 120);
-
-    pub fn render(f: &mut Frame, area: Rect, data: &TelemetryData, poll_interval_ms: u64, is_paused: bool) {
+    pub fn render(f: &mut Frame, area: Rect, data: &TelemetryData, poll_interval_ms: u64, is_paused: bool, theme: &ThemePalette) {
         // Adapt layout based on available width/height
         if area.width < 34 {
-            Self::render_compact(f, area, data, poll_interval_ms, is_paused);
+            Self::render_compact(f, area, data, poll_interval_ms, is_paused, theme);
             return;
         }
 
@@ -32,19 +29,19 @@ impl TelemetryView {
             .split(area);
 
         // 1. Memory Card (Proportion Bar + Indicators + Key Stats)
-        Self::render_memory_card(f, chunks[0], data);
+        Self::render_memory_card(f, chunks[0], data, theme);
 
         // 2. CPU Card (Continuous Line Waveform + Main & Fork/Children Breakdown)
-        Self::render_cpu_card(f, chunks[1], data);
+        Self::render_cpu_card(f, chunks[1], data, theme);
 
         // 3. Core Metrics Card (Throughput + Hit Rate + Health)
-        Self::render_metrics_card(f, chunks[2], data, poll_interval_ms, is_paused);
+        Self::render_metrics_card(f, chunks[2], data, poll_interval_ms, is_paused, theme);
 
         // 4. Quick Tips Card
-        Self::render_tips_card(f, chunks[3], data);
+        Self::render_tips_card(f, chunks[3], data, theme);
     }
 
-    fn render_memory_card(f: &mut Frame, area: Rect, data: &TelemetryData) {
+    fn render_memory_card(f: &mut Frame, area: Rect, data: &TelemetryData, theme: &ThemePalette) {
         let max_b = data.metrics.max_memory_bytes.unwrap_or(0);
         let used_b = data.metrics.used_memory_bytes.unwrap_or(0);
         let rss_b = data.metrics.used_memory_rss_bytes.unwrap_or(used_b);
@@ -61,11 +58,11 @@ impl TelemetryView {
 
         // Determine border color by memory pressure
         let (border_color, status_label, status_color) = if max_b > 0 && mem_ratio > 0.90 {
-            (Color::Rgb(239, 68, 68), if w >= 45 { "[CRITICAL] > 90%" } else { "[CRIT]" }, Color::Red)
+            (theme.status_critical, if w >= 45 { "[CRITICAL] > 90%" } else { "[CRIT]" }, theme.status_critical)
         } else if max_b > 0 && mem_ratio > 0.70 {
-            (Color::Rgb(245, 158, 11), if w >= 45 { "[WARNING] > 70%" } else { "[WARN]" }, Color::Yellow)
+            (theme.status_warning, if w >= 45 { "[WARNING] > 70%" } else { "[WARN]" }, theme.status_warning)
         } else {
-            (Color::Cyan, if w >= 45 { "[HEALTHY] Normal" } else { "[OK]" }, Color::Green)
+            (theme.border_focused, if w >= 45 { "[HEALTHY] Normal" } else { "[OK]" }, theme.status_healthy)
         };
 
         let max_mem_str = data.metrics.max_memory_display();
@@ -95,9 +92,6 @@ impl TelemetryView {
         }
 
         // 1. Calculate Multi-Segment Proportions
-        // Segment 1 (Used Memory): Blue / Cyan
-        // Segment 2 (Fragmentation / RSS Overhead): Yellow / Orange
-        // Segment 3 (Max Memory Headroom): Dark Gray
         let scale_total = if max_b > 0 {
             max_b as f64
         } else {
@@ -119,41 +113,41 @@ impl TelemetryView {
 
         let mut bar_spans = Vec::new();
         if used_cols > 0 {
-            bar_spans.push(Span::styled("█".repeat(used_cols), Style::default().fg(Color::Rgb(56, 189, 248))));
+            bar_spans.push(Span::styled("█".repeat(used_cols), Style::default().fg(theme.mem_bar_used)));
         }
         if rss_cols > 0 {
-            bar_spans.push(Span::styled("█".repeat(rss_cols), Style::default().fg(Color::Rgb(251, 191, 36))));
+            bar_spans.push(Span::styled("█".repeat(rss_cols), Style::default().fg(theme.mem_bar_rss)));
         }
         if free_cols > 0 {
-            bar_spans.push(Span::styled("█".repeat(free_cols), Style::default().fg(Color::Rgb(45, 55, 72))));
+            bar_spans.push(Span::styled("█".repeat(free_cols), Style::default().fg(theme.mem_bar_free)));
         }
 
         // 2. Legend Row (Used Memory | Fragmentation Ratio | Max Memory)
         let legend_spans = if w >= 52 {
             vec![
-                Span::styled("■ ", Style::default().fg(Color::Rgb(56, 189, 248))),
-                Span::styled("Used Memory   ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled("■ ", Style::default().fg(Color::Rgb(251, 191, 36))),
-                Span::styled("Frag Ratio   ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled("■ ", Style::default().fg(Color::Rgb(75, 85, 99))),
-                Span::styled("Max Memory", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("■ ", Style::default().fg(theme.mem_bar_used)),
+                Span::styled("Used Memory   ", Style::default().fg(theme.telemetry_label)),
+                Span::styled("■ ", Style::default().fg(theme.mem_bar_rss)),
+                Span::styled("Frag Ratio   ", Style::default().fg(theme.telemetry_label)),
+                Span::styled("■ ", Style::default().fg(theme.mem_bar_free)),
+                Span::styled("Max Memory", Style::default().fg(theme.telemetry_label)),
             ]
         } else {
             vec![
-                Span::styled("■ ", Style::default().fg(Color::Rgb(56, 189, 248))),
-                Span::styled("Used  ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled("■ ", Style::default().fg(Color::Rgb(251, 191, 36))),
-                Span::styled("Frag  ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled("■ ", Style::default().fg(Color::Rgb(75, 85, 99))),
-                Span::styled("Max", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("■ ", Style::default().fg(theme.mem_bar_used)),
+                Span::styled("Used  ", Style::default().fg(theme.telemetry_label)),
+                Span::styled("■ ", Style::default().fg(theme.mem_bar_rss)),
+                Span::styled("Frag  ", Style::default().fg(theme.telemetry_label)),
+                Span::styled("■ ", Style::default().fg(theme.mem_bar_free)),
+                Span::styled("Max", Style::default().fg(theme.telemetry_label)),
             ]
         };
 
         // 3. Details Rows (Multi-Tier Adaptive Folding)
         let frag_color = if let Some(ratio) = data.metrics.mem_fragmentation_ratio {
-            if ratio > 1.8 { Color::Yellow } else if ratio < 0.9 { Color::Red } else { Color::Green }
+            if ratio > 1.8 { theme.status_warning } else if ratio < 0.9 { theme.status_critical } else { theme.status_healthy }
         } else {
-            Self::LABEL_COLOR
+            theme.telemetry_label
         };
 
         let mut content = vec![
@@ -163,30 +157,30 @@ impl TelemetryView {
 
         if w >= 64 {
             let details_spans = vec![
-                Span::styled("Used: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(data.metrics.used_memory_display(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(" | ", Style::default().fg(Self::DIVIDER_COLOR)),
-                Span::styled("RSS: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(data.metrics.rss_display(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(" | ", Style::default().fg(Self::DIVIDER_COLOR)),
-                Span::styled("Max: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(data.metrics.max_memory_display(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(" | ", Style::default().fg(Self::DIVIDER_COLOR)),
-                Span::styled("Frag: ", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("Used: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(data.metrics.used_memory_display(), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled(" | ", Style::default().fg(theme.divider)),
+                Span::styled("RSS: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(data.metrics.rss_display(), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled(" | ", Style::default().fg(theme.divider)),
+                Span::styled("Max: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(data.metrics.max_memory_display(), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled(" | ", Style::default().fg(theme.divider)),
+                Span::styled("Frag: ", Style::default().fg(theme.telemetry_label)),
                 Span::styled(data.metrics.frag_display(), Style::default().fg(frag_color).add_modifier(Modifier::BOLD)),
             ];
             content.push(Line::from(details_spans));
         } else {
             let line1 = vec![
-                Span::styled("Used: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{:<10} ", data.metrics.used_memory_display()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("RSS: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(data.metrics.rss_display(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Used: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{:<10} ", data.metrics.used_memory_display()), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled("RSS: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(data.metrics.rss_display(), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
             ];
             let line2 = vec![
-                Span::styled("Max:  ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{:<10} ", data.metrics.max_memory_display()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("Frag: ", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("Max:  ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{:<10} ", data.metrics.max_memory_display()), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled("Frag: ", Style::default().fg(theme.telemetry_label)),
                 Span::styled(data.metrics.frag_display(), Style::default().fg(frag_color).add_modifier(Modifier::BOLD)),
             ];
             content.push(Line::from(line1));
@@ -196,14 +190,14 @@ impl TelemetryView {
         f.render_widget(Paragraph::new(content), inner);
     }
 
-    fn render_cpu_card(f: &mut Frame, area: Rect, data: &TelemetryData) {
+    fn render_cpu_card(f: &mut Frame, area: Rect, data: &TelemetryData, theme: &ThemePalette) {
         let w = area.width;
         let cpu_color = if data.metrics.cpu_usage_pct > 80.0 {
-            Color::Rgb(239, 68, 68)
+            theme.status_critical
         } else if data.metrics.cpu_usage_pct > 50.0 {
-            Color::Rgb(245, 158, 11)
+            theme.status_warning
         } else {
-            Color::Cyan
+            theme.border_focused
         };
 
         let title_text = if w >= 48 {
@@ -221,7 +215,7 @@ impl TelemetryView {
             .border_style(Style::default().fg(cpu_color))
             .title(Span::styled(
                 title_text,
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD),
             ));
 
         let inner = cpu_block.inner(area);
@@ -238,7 +232,7 @@ impl TelemetryView {
         // 1. Render Continuous Line Waveform using Braille sub-pixel grid
         let wave_width = sub_chunks[0].width as usize;
         let wave_height = sub_chunks[0].height as usize;
-        let wave_lines = Self::render_line_waveform(&data.history.cpu_float_slice(), wave_width, wave_height);
+        let wave_lines = Self::render_line_waveform(&data.history.cpu_float_slice(), wave_width, wave_height, theme);
         f.render_widget(Paragraph::new(wave_lines), sub_chunks[0]);
 
         // 2. Render CPU Breakdown details (Main Process/Thread + Fork/Children)
@@ -247,17 +241,17 @@ impl TelemetryView {
 
         let breakdown_lines = vec![
             Line::from(vec![
-                Span::styled(" Main: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(main_str, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" Main: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(main_str, Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
-                Span::styled(" Fork/Children: ", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled(" Fork/Children: ", Style::default().fg(theme.telemetry_label)),
                 Span::styled(
                     children_str.clone(),
                     if children_str == "N/A" {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(theme.text_muted)
                     } else {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default().fg(theme.status_warning).add_modifier(Modifier::BOLD)
                     },
                 ),
             ]),
@@ -267,7 +261,7 @@ impl TelemetryView {
     }
 
     /// Renders a continuous, smooth line waveform using 2x4 sub-pixel Braille characters
-    fn render_line_waveform(data: &[f64], cols: usize, rows: usize) -> Vec<Line<'static>> {
+    fn render_line_waveform(data: &[f64], cols: usize, rows: usize, theme: &ThemePalette) -> Vec<Line<'static>> {
         if cols == 0 || rows == 0 {
             return Vec::new();
         }
@@ -320,7 +314,7 @@ impl TelemetryView {
             }
             lines.push(Line::from(Span::styled(
                 s,
-                Style::default().fg(Color::Rgb(56, 189, 248)),
+                Style::default().fg(theme.cpu_waveform),
             )));
         }
 
@@ -380,52 +374,52 @@ impl TelemetryView {
         }
     }
 
-    fn render_metrics_card(f: &mut Frame, area: Rect, data: &TelemetryData, poll_interval_ms: u64, is_paused: bool) {
+    fn render_metrics_card(f: &mut Frame, area: Rect, data: &TelemetryData, poll_interval_ms: u64, is_paused: bool, theme: &ThemePalette) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(65, 80, 95)))
+            .border_style(Style::default().fg(theme.telemetry_card_border))
             .title(Span::styled(
                 " Core Metrics & Health ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.status_warning).add_modifier(Modifier::BOLD),
             ));
 
         let inner = block.inner(area);
         f.render_widget(block, area);
 
         let poll_badge = if is_paused || poll_interval_ms == 0 {
-            Span::styled("Paused", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            Span::styled("Paused", Style::default().fg(theme.status_warning).add_modifier(Modifier::BOLD))
         } else {
-            Span::styled(format!("{}ms", poll_interval_ms), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            Span::styled(format!("{}ms", poll_interval_ms), Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD))
         };
 
         let hit_rate_color = if let Some(rate) = data.metrics.hit_rate_pct {
-            if rate > 90.0 { Color::Green } else if rate > 70.0 { Color::Yellow } else { Color::Red }
+            if rate > 90.0 { theme.status_healthy } else if rate > 70.0 { theme.status_warning } else { theme.status_critical }
         } else {
-            Self::LABEL_COLOR
+            theme.telemetry_label
         };
 
         let lines = vec![
             Line::from(vec![
-                Span::styled(" Clients: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{:<5}", data.metrics.connected_clients), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(" Keys: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{:<8}", crate::core::telemetry::TelemetryParser::format_number(data.metrics.total_keys)), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" Clients: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{:<5}", data.metrics.connected_clients), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled(" Keys: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{:<8}", crate::core::telemetry::TelemetryParser::format_number(data.metrics.total_keys)), Style::default().fg(theme.border_focused).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
-                Span::styled(" Hit Rate: ", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled(" Hit Rate: ", Style::default().fg(theme.telemetry_label)),
                 Span::styled(data.metrics.hit_rate_display(), Style::default().fg(hit_rate_color).add_modifier(Modifier::BOLD)),
-                Span::styled(" Up: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(&data.metrics.uptime_human, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" Up: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(&data.metrics.uptime_human, Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
-                Span::styled(" Throughput: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{}/s", data.metrics.ops_display()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(" · Net: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(data.metrics.net_display(), Style::default().fg(Color::White)),
+                Span::styled(" Throughput: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{}/s", data.metrics.ops_display()), Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD)),
+                Span::styled(" · Net: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(data.metrics.net_display(), Style::default().fg(theme.telemetry_value)),
             ]),
             Line::from(vec![
-                Span::styled(" Polling Interval: ", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled(" Polling Interval: ", Style::default().fg(theme.telemetry_label)),
                 poll_badge,
             ]),
         ];
@@ -433,14 +427,14 @@ impl TelemetryView {
         f.render_widget(Paragraph::new(lines), inner);
     }
 
-    fn render_tips_card(f: &mut Frame, area: Rect, _data: &TelemetryData) {
+    fn render_tips_card(f: &mut Frame, area: Rect, _data: &TelemetryData, theme: &ThemePalette) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(65, 80, 95)))
+            .border_style(Style::default().fg(theme.telemetry_card_border))
             .title(Span::styled(
                 " Quick Guidance ",
-                Style::default().fg(Color::Rgb(180, 160, 255)).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.conn_cluster).add_modifier(Modifier::BOLD),
             ));
 
         let inner = block.inner(area);
@@ -448,32 +442,36 @@ impl TelemetryView {
 
         let lines = vec![
             Line::from(vec![
-                Span::styled("• /interval [ms|s|pause] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled("Polling rate", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("• /theme [dark|light|toggle] ", Style::default().fg(theme.help_title_cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("UI Theme", Style::default().fg(theme.telemetry_label)),
             ]),
             Line::from(vec![
-                Span::styled("• /scan [pattern] [count] ", Style::default().fg(Color::Yellow)),
-                Span::styled("Safe scan", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("• /interval [ms|s|pause] ", Style::default().fg(theme.cmd_name_native).add_modifier(Modifier::BOLD)),
+                Span::styled("Polling rate", Style::default().fg(theme.telemetry_label)),
             ]),
             Line::from(vec![
-                Span::styled("• /bigkeys ", Style::default().fg(Color::Green)),
-                Span::styled("Profile memory", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("• /scan [pattern] [count] ", Style::default().fg(theme.status_warning)),
+                Span::styled("Safe scan", Style::default().fg(theme.telemetry_label)),
             ]),
             Line::from(vec![
-                Span::styled("• F2 / F3 / F4 ", Style::default().fg(Color::Rgb(180, 160, 255))),
-                Span::styled("Switch views", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("• /bigkeys ", Style::default().fg(theme.status_healthy)),
+                Span::styled("Profile memory", Style::default().fg(theme.telemetry_label)),
+            ]),
+            Line::from(vec![
+                Span::styled("• F2 / F3 / F4 ", Style::default().fg(theme.conn_cluster)),
+                Span::styled("Switch views", Style::default().fg(theme.telemetry_label)),
             ]),
         ];
 
         f.render_widget(Paragraph::new(lines), inner);
     }
 
-    fn render_compact(f: &mut Frame, area: Rect, data: &TelemetryData, poll_interval_ms: u64, is_paused: bool) {
+    fn render_compact(f: &mut Frame, area: Rect, data: &TelemetryData, poll_interval_ms: u64, is_paused: bool, theme: &ThemePalette) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(Span::styled(" Telemetry ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+            .border_style(Style::default().fg(theme.border_focused))
+            .title(Span::styled(" Telemetry ", Style::default().fg(theme.border_focused).add_modifier(Modifier::BOLD)));
 
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -488,28 +486,28 @@ impl TelemetryView {
 
         let lines = vec![
             Line::from(vec![
-                Span::styled("MEM: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{:.1}%", mem_ratio * 100.0), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" ({})", data.metrics.used_memory_display()), Style::default().fg(Color::White)),
+                Span::styled("MEM: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{:.1}%", mem_ratio * 100.0), Style::default().fg(theme.border_focused).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({})", data.metrics.used_memory_display()), Style::default().fg(theme.telemetry_value)),
             ]),
             Line::from(vec![
-                Span::styled("CPU: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{:.1}%", data.metrics.cpu_usage_pct), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("CPU: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{:.1}%", data.metrics.cpu_usage_pct), Style::default().fg(theme.status_warning).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
-                Span::styled("OPS: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(format!("{}/s", data.metrics.ops_display()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled("OPS: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{}/s", data.metrics.ops_display()), Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
-                Span::styled("KEYS: ", Style::default().fg(Self::LABEL_COLOR)),
-                Span::styled(crate::core::telemetry::TelemetryParser::format_number(data.metrics.total_keys), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("KEYS: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(crate::core::telemetry::TelemetryParser::format_number(data.metrics.total_keys), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
-                Span::styled("POLL: ", Style::default().fg(Self::LABEL_COLOR)),
+                Span::styled("POLL: ", Style::default().fg(theme.telemetry_label)),
                 if is_paused {
-                    Span::styled("Paused", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                    Span::styled("Paused", Style::default().fg(theme.status_warning).add_modifier(Modifier::BOLD))
                 } else {
-                    Span::styled(format!("{}ms", poll_interval_ms), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                    Span::styled(format!("{}ms", poll_interval_ms), Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD))
                 },
             ]),
         ];

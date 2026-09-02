@@ -1,7 +1,8 @@
 use crate::core::autocomplete::{SuggestionItem, SuggestionKind};
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
@@ -15,6 +16,7 @@ impl AutocompletePopup {
         input_area: Rect,
         items: &[SuggestionItem],
         selected_idx: usize,
+        theme: &ThemePalette,
     ) {
         if items.is_empty() {
             return;
@@ -54,10 +56,10 @@ impl AutocompletePopup {
         let list_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.auto_border))
             .title(Span::styled(
                 list_title,
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.auto_border).add_modifier(Modifier::BOLD),
             ));
 
         let inner_list_area = list_block.inner(list_area);
@@ -77,11 +79,11 @@ impl AutocompletePopup {
             let is_selected = actual_idx == selected_idx;
 
             let (badge_bg, badge_fg) = match item.kind {
-                SuggestionKind::Macro => (Color::Rgb(50, 45, 20), Color::Yellow),
-                SuggestionKind::Node => (Color::Rgb(40, 30, 80), Color::Rgb(180, 160, 255)),
-                SuggestionKind::Command => (Color::Rgb(20, 50, 60), Color::Cyan),
-                SuggestionKind::Subcommand => (Color::Rgb(20, 45, 55), Color::Rgb(100, 220, 255)),
-                SuggestionKind::Argument => (Color::Rgb(45, 45, 25), Color::Rgb(255, 220, 120)),
+                SuggestionKind::Macro => (theme.auto_badge_macro_bg, theme.auto_badge_macro_fg),
+                SuggestionKind::Node => (theme.auto_badge_node_bg, theme.auto_badge_node_fg),
+                SuggestionKind::Command => (theme.auto_badge_cmd_bg, theme.auto_badge_cmd_fg),
+                SuggestionKind::Subcommand => (theme.auto_badge_sub_bg, theme.auto_badge_sub_fg),
+                SuggestionKind::Argument => (theme.auto_badge_arg_bg, theme.auto_badge_arg_fg),
             };
 
             let prefix_icon = if is_selected { "▶ " } else { "  " };
@@ -90,9 +92,9 @@ impl AutocompletePopup {
                 Span::styled(
                     prefix_icon,
                     if is_selected {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default().fg(theme.auto_border).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(theme.text_muted)
                     },
                 ),
                 Span::styled(
@@ -103,16 +105,16 @@ impl AutocompletePopup {
                 Span::styled(
                     &item.display_title,
                     if is_selected {
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                        Style::default().fg(theme.auto_item_selected_fg).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::Rgb(220, 220, 220))
+                        Style::default().fg(theme.auto_item_unselected_fg)
                     },
                 ),
             ];
 
             // If no side doc popup, show short description if space permits
             if !has_doc_popup && list_w >= 50 && !item.description.is_empty() {
-                spans.push(Span::styled(" - ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(" - ", Style::default().fg(theme.text_muted)));
                 let max_desc_len = (list_w as usize).saturating_sub(item.display_title.len() + 18);
                 let desc_cut = if item.description.len() > max_desc_len {
                     format!("{}…", &item.description[..max_desc_len.saturating_sub(1)])
@@ -122,15 +124,15 @@ impl AutocompletePopup {
                 spans.push(Span::styled(
                     desc_cut,
                     if is_selected {
-                        Style::default().fg(Color::Rgb(170, 220, 255))
+                        Style::default().fg(theme.auto_border)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(theme.auto_desc_fg)
                     },
                 ));
             }
 
             let item_style = if is_selected {
-                Style::default().bg(Color::Rgb(25, 35, 55))
+                Style::default().bg(theme.auto_item_selected_bg)
             } else {
                 Style::default()
             };
@@ -165,11 +167,11 @@ impl AutocompletePopup {
             f.render_widget(Clear, doc_area);
 
             let (doc_border_color, doc_badge_title) = match selected_item.kind {
-                SuggestionKind::Macro => (Color::Yellow, format!(" Macro: {} ", selected_item.display_title)),
-                SuggestionKind::Node => (Color::Rgb(180, 160, 255), format!(" Node: {} ", selected_item.display_title)),
-                SuggestionKind::Command => (Color::Cyan, format!(" Command: {} ", selected_item.display_title)),
-                SuggestionKind::Subcommand => (Color::Rgb(100, 220, 255), format!(" Subcommand: {} ", selected_item.display_title)),
-                SuggestionKind::Argument => (Color::Rgb(255, 220, 120), format!(" Option: {} ", selected_item.display_title)),
+                SuggestionKind::Macro => (theme.status_warning, format!(" Macro: {} ", selected_item.display_title)),
+                SuggestionKind::Node => (theme.shard_node_id, format!(" Node: {} ", selected_item.display_title)),
+                SuggestionKind::Command => (theme.border_focused, format!(" Command: {} ", selected_item.display_title)),
+                SuggestionKind::Subcommand => (theme.val_integer, format!(" Subcommand: {} ", selected_item.display_title)),
+                SuggestionKind::Argument => (theme.status_warning, format!(" Option: {} ", selected_item.display_title)),
             };
 
             let doc_block = Block::default()
@@ -189,8 +191,8 @@ impl AutocompletePopup {
             // Syntax Line
             if !selected_item.syntax.is_empty() {
                 doc_lines.push(Line::from(vec![
-                    Span::styled("Syntax: ", Style::default().fg(Color::Rgb(160, 175, 190))),
-                    Span::styled(&selected_item.syntax, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("Syntax: ", Style::default().fg(theme.telemetry_label)),
+                    Span::styled(&selected_item.syntax, Style::default().fg(theme.border_focused).add_modifier(Modifier::BOLD)),
                 ]));
             }
 
@@ -198,14 +200,14 @@ impl AutocompletePopup {
             if !selected_item.description.is_empty() {
                 if let Some(rest) = selected_item.description.strip_prefix("[!]") {
                     doc_lines.push(Line::from(vec![
-                        Span::styled("Desc:   ", Style::default().fg(Color::Rgb(160, 175, 190))),
-                        Span::styled("[!] ", Style::default().fg(Color::Rgb(255, 100, 100)).add_modifier(Modifier::BOLD)),
-                        Span::styled(rest.trim_start(), Style::default().fg(Color::White)),
+                        Span::styled("Desc:   ", Style::default().fg(theme.telemetry_label)),
+                        Span::styled("[!] ", Style::default().fg(theme.status_critical).add_modifier(Modifier::BOLD)),
+                        Span::styled(rest.trim_start(), Style::default().fg(theme.text_primary)),
                     ]));
                 } else {
                     doc_lines.push(Line::from(vec![
-                        Span::styled("Desc:   ", Style::default().fg(Color::Rgb(160, 175, 190))),
-                        Span::styled(&selected_item.description, Style::default().fg(Color::White)),
+                        Span::styled("Desc:   ", Style::default().fg(theme.telemetry_label)),
+                        Span::styled(&selected_item.description, Style::default().fg(theme.text_primary)),
                     ]));
                 }
             }
@@ -213,11 +215,10 @@ impl AutocompletePopup {
             // Example Line
             if !selected_item.example.is_empty() {
                 doc_lines.push(Line::from(vec![
-                    Span::styled("Usage:  ", Style::default().fg(Color::Rgb(160, 175, 190))),
-                    Span::styled(&selected_item.example, Style::default().fg(Color::Yellow)),
+                    Span::styled("Usage:  ", Style::default().fg(theme.telemetry_label)),
+                    Span::styled(&selected_item.example, Style::default().fg(theme.status_warning)),
                 ]));
             }
-
 
             let doc_paragraph = Paragraph::new(doc_lines)
                 .wrap(Wrap { trim: true });

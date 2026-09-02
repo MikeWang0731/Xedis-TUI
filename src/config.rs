@@ -1,3 +1,4 @@
+use crate::ui::theme::ThemeMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -52,6 +53,8 @@ pub struct AppConfig {
     pub cluster_mode: bool,
     #[serde(default)]
     pub default_layout: LayoutPreset,
+    #[serde(default)]
+    pub theme: ThemeMode,
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
     #[serde(default = "default_max_stream_records")]
@@ -88,6 +91,7 @@ impl Default for AppConfig {
             password: None,
             cluster_mode: false,
             default_layout: LayoutPreset::Balanced,
+            theme: ThemeMode::default(),
             poll_interval_ms: default_poll_interval_ms(),
             max_stream_records: default_max_stream_records(),
             safety_guard_enabled: default_safety_guard_enabled(),

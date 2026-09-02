@@ -58,16 +58,17 @@ fn test_virtual_slice_only_renders_requested_window() {
     // Test virtual slice for a small viewport (e.g. 20 lines from line 500 to 520)
     let start_line = 500;
     let end_line = 520;
-    let sliced_lines = StreamView::render_virtual_lines(&records, start_line, end_line, 80, false);
+    let theme = xedis_tui::ui::theme::ThemePalette::dark();
+    let sliced_lines = StreamView::render_virtual_lines(&records, start_line, end_line, 80, false, &theme);
 
     assert_eq!(sliced_lines.len(), 20, "Should only allocate exactly 20 lines");
 
     // Test start of stream
-    let top_lines = StreamView::render_virtual_lines(&records, 0, 15, 80, false);
+    let top_lines = StreamView::render_virtual_lines(&records, 0, 15, 80, false, &theme);
     assert_eq!(top_lines.len(), 15);
 
     // Test end of stream
-    let bot_lines = StreamView::render_virtual_lines(&records, total.saturating_sub(10), total, 80, false);
+    let bot_lines = StreamView::render_virtual_lines(&records, total.saturating_sub(10), total, 80, false, &theme);
     assert_eq!(bot_lines.len(), 10);
 }
 

@@ -249,6 +249,11 @@ impl AutocompleteEngine {
         SubcommandSpec { parent_cmd: "/INTERVAL", name: "5S", signature: "/interval 5s", description: "将后台遥测监控指标采样周期调整为 5 秒 (超低开销)", example: "/interval 5s" },
         SubcommandSpec { parent_cmd: "/INTERVAL", name: "PAUSE", signature: "/interval pause", description: "暂停后台定时遥测数据采集轮询", example: "/interval pause" },
         SubcommandSpec { parent_cmd: "/INTERVAL", name: "RESUME", signature: "/interval resume", description: "恢复后台定时遥测数据采集轮询", example: "/interval resume" },
+
+        // /theme arguments
+        SubcommandSpec { parent_cmd: "/THEME", name: "DARK", signature: "/theme dark", description: "切换为深色背景主题 (Dark Theme - 适合深色终端)", example: "/theme dark" },
+        SubcommandSpec { parent_cmd: "/THEME", name: "LIGHT", signature: "/theme light", description: "切换为浅色背景主题 (Light Theme - 高对比度适配白色终端)", example: "/theme light" },
+        SubcommandSpec { parent_cmd: "/THEME", name: "TOGGLE", signature: "/theme toggle", description: "快速在深色与浅色主题之间来回切换", example: "/theme toggle" },
     ];
 
     /// Generate suggestion items based on current input buffer, cursor position, and cluster nodes

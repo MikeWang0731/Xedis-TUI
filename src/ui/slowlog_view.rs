@@ -1,6 +1,7 @@
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem},
     Frame,
@@ -19,7 +20,7 @@ pub struct SlowlogEntry {
 pub struct SlowlogView;
 
 impl SlowlogView {
-    pub fn render(f: &mut Frame, area: Rect, entries: &[SlowlogEntry], scroll_offset: usize) {
+    pub fn render(f: &mut Frame, area: Rect, entries: &[SlowlogEntry], scroll_offset: usize, theme: &ThemePalette) {
         let w = area.width;
         let title_text = if w >= 48 {
             " Slowlog & Diagnostics (Threshold: >10ms) "
@@ -32,10 +33,10 @@ impl SlowlogView {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(theme.slowlog_border))
             .title(Span::styled(
                 title_text,
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.slowlog_border).add_modifier(Modifier::BOLD),
             ));
 
         let inner = block.inner(area);
@@ -47,24 +48,24 @@ impl SlowlogView {
         // Top summary (Multi-Tier Adaptive Folding)
         if width >= 68 {
             let summary_line = Line::from(vec![
-                Span::styled(" [Slowlog Monitor: ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled(format!("Captured: {} ", entries.len()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("· Threshold: >10ms · Auto-Polled]", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled(" [Slowlog Monitor: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("Captured: {} ", entries.len()), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled("· Threshold: >10ms · Auto-Polled]", Style::default().fg(theme.telemetry_label)),
             ]);
             items.push(ListItem::new(vec![summary_line, Line::from("")]));
         } else if width >= 44 {
             let line1 = Line::from(vec![
-                Span::styled(" [Slowlogs Captured: ", Style::default().fg(Color::Rgb(165, 180, 195))),
-                Span::styled(format!("{} ", entries.len()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("(Auto-Polled)]", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled(" [Slowlogs Captured: ", Style::default().fg(theme.telemetry_label)),
+                Span::styled(format!("{} ", entries.len()), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled("(Auto-Polled)]", Style::default().fg(theme.telemetry_label)),
             ]);
             let line2 = Line::from(vec![
-                Span::styled(" [Threshold: >10ms · Auto-Diagnose]", Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled(" [Threshold: >10ms · Auto-Diagnose]", Style::default().fg(theme.telemetry_label)),
             ]);
             items.push(ListItem::new(vec![line1, line2, Line::from("")]));
         } else {
             let summary_line = Line::from(vec![
-                Span::styled(format!(" [Slowlogs: {} (>10ms)]", entries.len()), Style::default().fg(Color::Rgb(165, 180, 195))),
+                Span::styled(format!(" [Slowlogs: {} (>10ms)]", entries.len()), Style::default().fg(theme.telemetry_label)),
             ]);
             items.push(ListItem::new(vec![summary_line, Line::from("")]));
         }
@@ -73,22 +74,22 @@ impl SlowlogView {
             if width >= 62 {
                 items.push(ListItem::new(vec![
                     Line::from(vec![
-                        Span::styled("  [OK] No slow queries detected. Instance operating smoothly.", Style::default().fg(Color::Green)),
+                        Span::styled("  [OK] No slow queries detected. Instance operating smoothly.", Style::default().fg(theme.status_healthy)),
                     ]),
                 ]));
             } else if width >= 38 {
                 items.push(ListItem::new(vec![
                     Line::from(vec![
-                        Span::styled("  [OK] No slow queries detected.", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::styled("  [OK] No slow queries detected.", Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD)),
                     ]),
                     Line::from(vec![
-                        Span::styled("  Instance operating smoothly.", Style::default().fg(Color::Rgb(165, 180, 195))),
+                        Span::styled("  Instance operating smoothly.", Style::default().fg(theme.telemetry_label)),
                     ]),
                 ]));
             } else {
                 items.push(ListItem::new(vec![
                     Line::from(vec![
-                        Span::styled("  [OK] No slow queries", Style::default().fg(Color::Green)),
+                        Span::styled("  [OK] No slow queries", Style::default().fg(theme.status_healthy)),
                     ]),
                 ]));
             }
@@ -98,11 +99,11 @@ impl SlowlogView {
 
         for entry in entries {
             let (card_color, level_str) = if entry.latency_ms >= 50.0 {
-                (Color::Rgb(239, 68, 68), "[CRITICAL]")
+                (theme.status_critical, "[CRITICAL]")
             } else if entry.latency_ms >= 10.0 {
-                (Color::Rgb(245, 158, 11), "[WARNING]")
+                (theme.status_warning, "[WARNING]")
             } else {
-                (Color::Green, "[NOTICE]")
+                (theme.status_healthy, "[NOTICE]")
             };
 
             let mut lines = Vec::new();
@@ -121,17 +122,17 @@ impl SlowlogView {
                 lines.push(Line::from(vec![
                     Span::styled(" │  ", Style::default().fg(card_color)),
                     Span::styled(format!("{:.1}ms ", entry.latency_ms), Style::default().fg(card_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("· Time: {} · Node: @{}", entry.timestamp, entry.node), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("· Time: {} · Node: @{}", entry.timestamp, entry.node), Style::default().fg(theme.text_muted)),
                 ]));
             } else {
                 lines.push(Line::from(vec![
                     Span::styled(" │  ", Style::default().fg(card_color)),
                     Span::styled(format!("Latency: {:.1}ms ", entry.latency_ms), Style::default().fg(card_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("(@{})", entry.node), Style::default().fg(Color::Rgb(180, 160, 255))),
+                    Span::styled(format!("(@{})", entry.node), Style::default().fg(theme.shard_node_id)),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled(" │  ", Style::default().fg(card_color)),
-                    Span::styled(format!("Time: {}", entry.timestamp), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("Time: {}", entry.timestamp), Style::default().fg(theme.text_muted)),
                 ]));
             }
 
@@ -142,12 +143,12 @@ impl SlowlogView {
                 if i == 0 {
                     lines.push(Line::from(vec![
                         Span::styled(" │  Cmd: ", Style::default().fg(card_color)),
-                        Span::styled(cmd_part.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled(cmd_part.clone(), Style::default().fg(theme.slowlog_cmd).add_modifier(Modifier::BOLD)),
                     ]));
                 } else {
                     lines.push(Line::from(vec![
                         Span::styled(" │       ", Style::default().fg(card_color)),
-                        Span::styled(cmd_part.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled(cmd_part.clone(), Style::default().fg(theme.slowlog_cmd).add_modifier(Modifier::BOLD)),
                     ]));
                 }
             }
@@ -160,12 +161,12 @@ impl SlowlogView {
                     if i == 0 {
                         lines.push(Line::from(vec![
                             Span::styled(" │  Guidance: ", Style::default().fg(card_color).add_modifier(Modifier::BOLD)),
-                            Span::styled(part.clone(), Style::default().fg(Color::White)),
+                            Span::styled(part.clone(), Style::default().fg(theme.slowlog_guidance_text)),
                         ]));
                     } else {
                         lines.push(Line::from(vec![
                             Span::styled(" │            ", Style::default().fg(card_color)),
-                            Span::styled(part.clone(), Style::default().fg(Color::White)),
+                            Span::styled(part.clone(), Style::default().fg(theme.slowlog_guidance_text)),
                         ]));
                     }
                 }

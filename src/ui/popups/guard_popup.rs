@@ -1,7 +1,8 @@
 use crate::core::guard::{DangerAssessment, RiskLevel};
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     Frame,
@@ -10,7 +11,7 @@ use ratatui::{
 pub struct GuardPopup;
 
 impl GuardPopup {
-    pub fn render(f: &mut Frame, area: Rect, assessment: &DangerAssessment) {
+    pub fn render(f: &mut Frame, area: Rect, assessment: &DangerAssessment, theme: &ThemePalette) {
         // Calculate centered modal rect
         let popup_w = (area.width.saturating_sub(10)).clamp(46, 78);
         let popup_h = 16.min(area.height.saturating_sub(4)).max(12);
@@ -30,14 +31,14 @@ impl GuardPopup {
 
         let (border_color, badge_bg, badge_fg) = match assessment.level {
             RiskLevel::Level3Blocking => (
-                Color::Rgb(239, 68, 68),
-                Color::Rgb(80, 20, 20),
-                Color::Rgb(255, 100, 100),
+                theme.guard_l3_border,
+                theme.guard_l3_badge_bg,
+                theme.guard_l3_badge_fg,
             ),
             RiskLevel::Level2Warning => (
-                Color::Rgb(245, 158, 11),
-                Color::Rgb(70, 50, 15),
-                Color::Rgb(255, 200, 80),
+                theme.guard_l2_border,
+                theme.guard_l2_badge_bg,
+                theme.guard_l2_badge_fg,
             ),
         };
 
@@ -67,9 +68,9 @@ impl GuardPopup {
 
         // Header: Command attempted
         let cmd_line = Line::from(vec![
-            Span::styled("拦截指令: ", Style::default().fg(Color::Rgb(180, 195, 210))),
-            Span::styled(&assessment.command_str, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  ({})", assessment.title), Style::default().fg(Color::Cyan)),
+            Span::styled("拦截指令: ", Style::default().fg(theme.guard_cmd_title)),
+            Span::styled(&assessment.command_str, Style::default().fg(theme.cmd_name_macro).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  ({})", assessment.title), Style::default().fg(theme.cmd_name_native)),
         ]);
         f.render_widget(Paragraph::new(cmd_line), chunks[0]);
 
@@ -77,24 +78,23 @@ impl GuardPopup {
         let mut desc_lines = Vec::new();
         desc_lines.push(Line::from(vec![
             Span::styled("风险剖析: ", Style::default().fg(border_color).add_modifier(Modifier::BOLD)),
-            Span::styled(&assessment.reason, Style::default().fg(Color::Rgb(240, 245, 250))),
+            Span::styled(&assessment.reason, Style::default().fg(theme.guard_reason_text)),
         ]));
         desc_lines.push(Line::from(""));
         desc_lines.push(Line::from(vec![
-            Span::styled("安全建议: ", Style::default().fg(Color::Rgb(16, 185, 129)).add_modifier(Modifier::BOLD)),
-            Span::styled(&assessment.suggestion, Style::default().fg(Color::Rgb(215, 240, 225))),
+            Span::styled("安全建议: ", Style::default().fg(theme.guard_suggestion_title).add_modifier(Modifier::BOLD)),
+            Span::styled(&assessment.suggestion, Style::default().fg(theme.guard_suggestion_text)),
         ]));
-
 
         let desc_widget = Paragraph::new(desc_lines).wrap(Wrap { trim: true });
         f.render_widget(desc_widget, chunks[2]);
 
         // Footer: Action Buttons
         let action_line = Line::from(vec![
-            Span::styled(" [ Enter / 'y' ] ", Style::default().bg(Color::Rgb(60, 20, 20)).fg(Color::Rgb(255, 120, 120)).add_modifier(Modifier::BOLD)),
-            Span::styled(" 强制放行执行   ", Style::default().fg(Color::White)),
-            Span::styled(" [ Esc / 'n' ] ", Style::default().bg(Color::Rgb(20, 45, 60)).fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(" 放弃并修改", Style::default().fg(Color::White)),
+            Span::styled(" [ Enter / 'y' ] ", Style::default().bg(theme.guard_btn_confirm_bg).fg(theme.guard_btn_confirm_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" 强制放行执行   ", Style::default().fg(theme.text_primary)),
+            Span::styled(" [ Esc / 'n' ] ", Style::default().bg(theme.guard_btn_cancel_bg).fg(theme.guard_btn_cancel_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" 放弃并修改", Style::default().fg(theme.text_primary)),
         ]);
         let action_widget = Paragraph::new(action_line).alignment(ratatui::layout::Alignment::Center);
         f.render_widget(action_widget, chunks[4]);

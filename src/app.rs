@@ -566,6 +566,24 @@ impl App {
                         self.is_poll_paused,
                     );
                     (res, start.elapsed())
+                } else if lower_name == "/theme" {
+                    let start = Instant::now();
+                    let old_theme = self.config.theme;
+                    if let Some(arg) = args.first() {
+                        match arg.to_lowercase().as_str() {
+                            "light" => self.config.theme = crate::ui::theme::ThemeMode::Light,
+                            "dark" => self.config.theme = crate::ui::theme::ThemeMode::Dark,
+                            "toggle" => self.config.theme = self.config.theme.toggle(),
+                            _ => self.config.theme = self.config.theme.toggle(),
+                        }
+                    } else {
+                        self.config.theme = self.config.theme.toggle();
+                    }
+                    let res = MacroEngine::format_theme_result(
+                        old_theme.name(),
+                        self.config.theme.name(),
+                    );
+                    (res, start.elapsed())
                 } else if lower_name == "/settings" || lower_name == "/config" {
                     let start = Instant::now();
                     let res = MacroEngine::format_settings(
@@ -573,6 +591,7 @@ impl App {
                         self.config.port,
                         self.client.telemetry.is_cluster,
                         self.layout_preset.name(),
+                        self.config.theme.name(),
                         self.poll_interval.as_millis() as u64,
                         self.is_poll_paused,
                     );
