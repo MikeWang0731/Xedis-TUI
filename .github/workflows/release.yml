@@ -1,0 +1,139 @@
+name: Build release binaries
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: xedis-tui
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Select stable Rust
+        run: rustup update stable && rustup default stable
+
+      - name: Run tests
+        run: cargo test --locked
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: xedis-tui-windows-x86_64.zip
+            artifact: xedis-tui-windows-x86_64
+          - platform: macOS x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: xedis-tui-macos-x86_64.tar.gz
+            artifact: xedis-tui-macos-x86_64
+          - platform: macOS ARM64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            asset: xedis-tui-macos-aarch64.tar.gz
+            artifact: xedis-tui-macos-aarch64
+          - platform: Linux x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            asset: xedis-tui-linux-x86_64.tar.gz
+            artifact: xedis-tui-linux-x86_64
+          - platform: Linux ARM64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: xedis-tui-linux-aarch64.tar.gz
+            artifact: xedis-tui-linux-aarch64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Select stable Rust and install target
+        shell: bash
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist
+          Copy-Item "target/${{ matrix.target }}/release/$env:BINARY_NAME.exe" "dist/$env:BINARY_NAME.exe"
+          Compress-Archive -Path "dist/$env:BINARY_NAME.exe" -DestinationPath "${{ matrix.asset }}"
+
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/$BINARY_NAME" "dist/$BINARY_NAME"
+          chmod +x "dist/$BINARY_NAME"
+          tar -C dist -czf "${{ matrix.asset }}" "$BINARY_NAME"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
