@@ -98,3 +98,48 @@ fn test_formatter_cluster_map_response() {
         _ => panic!("Expected String formatting for cluster multi-node response"),
     }
 }
+
+#[test]
+fn test_main_layout_banner_dimensions() {
+    use ratatui::layout::Rect;
+    use xedis_tui::ui::layout::MainLayout;
+
+    // Standard terminal 120x30
+    let layout_std = MainLayout::build(Rect::new(0, 0, 120, 30), LayoutPreset::Balanced, None);
+    assert_eq!(layout_std.header.height, 6);
+    assert_eq!(layout_std.footer.height, 2);
+    assert_eq!(layout_std.body.height, 22);
+
+    // Compact terminal 80x12
+    let layout_compact = MainLayout::build(Rect::new(0, 0, 80, 12), LayoutPreset::Balanced, None);
+    assert_eq!(layout_compact.header.height, 4);
+
+    // Ultra compact terminal 80x8
+    let layout_tiny = MainLayout::build(Rect::new(0, 0, 80, 8), LayoutPreset::Balanced, None);
+    assert_eq!(layout_tiny.header.height, 2);
+}
+
+#[tokio::test]
+async fn test_banner_rendering_with_test_backend() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use xedis_tui::app::App;
+    use xedis_tui::config::AppConfig;
+    use xedis_tui::ui::render;
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let config = AppConfig::default();
+    let app = App::new(config).await;
+
+    terminal.draw(|f| {
+        render(f, &app);
+    }).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content = format!("{:?}", buffer);
+
+    // Verify ASCII Logo elements or keywords exist in the rendered output
+    assert!(content.contains("XEDIS") || content.contains("OFFLINE") || content.contains("CONNECTED"));
+}

@@ -2,3 +2,4 @@
 /xedis-tui-universal
 **/*.rs.bk
 .DS_Store
+.idea/

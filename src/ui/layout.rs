@@ -12,11 +12,19 @@ pub struct MainLayout {
 
 impl MainLayout {
     pub fn build(area: Rect, preset: LayoutPreset, custom_split: Option<u16>) -> Self {
-        // Vertical layout: Header (3), Body (Min 0), Footer (2)
+        // Vertical layout: Header banner (6 for standard displays), Body (Min 5), Footer (2)
+        let header_height = if area.height >= 16 {
+            6
+        } else if area.height >= 10 {
+            4
+        } else {
+            2
+        };
+
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(header_height),
                 Constraint::Min(5),
                 Constraint::Length(2),
             ])

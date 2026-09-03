@@ -74,101 +74,126 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
+const ASCII_LOGO: [&str; 5] = [
+    r"   _  __         ___     ",
+    r"  | |/ /__  ____/ (_)____",
+    r"  |   / _ \/ __  / / ___/",
+    r" /   /  __/ /_/ / (__  ) ",
+    r"/_/|_\___/\__,_/_/____/  ",
+];
+
 fn render_header(f: &mut Frame, area: Rect, app: &App, theme: &ThemePalette) {
     let w = area.width;
-    let (brand_len, layout_len) = if w >= 110 {
-        (16, 36)
-    } else if w >= 85 {
-        (12, 34)
-    } else if w >= 65 {
-        (9, 24)
+    if w == 0 || area.height == 0 {
+        return;
+    }
+
+    // Connection Status
+    let (status_tag, status_color) = if app.client.telemetry.connected {
+        ("● CONNECTED", theme.conn_connected)
     } else {
-        (9, 16)
+        ("● OFFLINE", theme.conn_offline)
     };
 
-    let header_chunks = Layout::default()
-        .direction(Direction::Horizontal)
+    // Fallback for extremely constrained terminal heights
+    if area.height < 5 {
+        let brand_text = Line::from(vec![
+            Span::styled(" [XEDIS] ", Style::default().bg(theme.brand_bg).fg(theme.brand_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" v0.1.0 ", Style::default().fg(theme.brand_version)),
+            Span::styled(format!(" {} ", status_tag), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+            Span::styled(&app.client.telemetry.server_desc, Style::default().fg(theme.conn_text)),
+        ]);
+        f.render_widget(Paragraph::new(brand_text), area);
+        return;
+    }
+
+    // Split into top banner (5 lines) and bottom divider line (1 line)
+    let header_rows = Layout::default()
+        .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(brand_len), // App Brand
-            Constraint::Min(12),           // Connection Info
-            Constraint::Length(layout_len), // Layout & Focus Indicator
+            Constraint::Length(5),
+            Constraint::Length(1),
         ])
         .split(area);
 
-    // Brand
-    let brand_text = if w >= 90 {
-        Line::from(vec![
-            Span::styled(" [XEDIS] ", Style::default().bg(theme.brand_bg).fg(theme.brand_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" v0.1.0 ", Style::default().fg(theme.brand_version)),
+    let banner_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(27), // ASCII Art Logo (25 chars + 2 margin)
+            Constraint::Min(0),     // Info rows
         ])
-    } else {
-        Line::from(vec![
-            Span::styled(" [XEDIS] ", Style::default().bg(theme.brand_bg).fg(theme.brand_fg).add_modifier(Modifier::BOLD)),
-        ])
-    };
-    f.render_widget(Paragraph::new(brand_text), header_chunks[0]);
+        .split(header_rows[0]);
 
-    // Connection Info
-    let (status_tag, status_color) = if app.client.telemetry.connected {
-        (" ● CONNECTED ", theme.conn_connected)
+    // 1. Column 1: ASCII Art Logo
+    let logo_lines: Vec<Line> = ASCII_LOGO
+        .iter()
+        .map(|&line| {
+            Line::from(vec![
+                Span::styled(line, Style::default().fg(theme.help_title_cyan).add_modifier(Modifier::BOLD)),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(logo_lines), banner_cols[0]);
+
+    // 2. Column 2: Info Rows (1: Connection, 2: Mode & Topology, 3: Layout & Focus)
+    let row1 = Line::from(vec![
+        Span::styled(" v0.1.0 ", Style::default().bg(theme.header_badge_bg).fg(theme.header_badge_fg).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(format!(" {} ", status_tag), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {} ", &app.client.telemetry.server_desc), Style::default().fg(theme.conn_text).add_modifier(Modifier::BOLD)),
+    ]);
+
+    let (mode_badge, mode_color) = if app.client.telemetry.is_cluster {
+        (" [Cluster Mode] ", theme.conn_cluster)
     } else {
-        (" ● OFFLINE ", theme.conn_offline)
+        (" [Standalone Mode] ", theme.conn_standalone)
     };
 
-    let cluster_tag = if app.client.telemetry.is_cluster {
-        Span::styled(" [Cluster] ", Style::default().fg(theme.conn_cluster))
+    let role_or_nodes = if app.client.telemetry.is_cluster {
+        format!(" · Nodes: {}", app.client.telemetry.topology.total_nodes)
     } else {
-        Span::styled(" [Standalone] ", Style::default().fg(theme.conn_standalone))
+        let role = app.client.telemetry.topology.replication.as_ref().map(|r| r.role.as_str()).unwrap_or("master");
+        format!(" · Role: {}", role)
     };
 
-    let conn_line = if w >= 80 {
-        Line::from(vec![
-            Span::styled(status_tag, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-            Span::styled(&app.client.telemetry.server_desc, Style::default().fg(theme.conn_text).add_modifier(Modifier::BOLD)),
-            cluster_tag,
-            Span::styled(format!(" Ping: {:.2}ms", app.client.telemetry.metrics.ping_latency_ms), Style::default().fg(theme.text_muted)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(status_tag, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-            Span::styled(&app.client.telemetry.server_desc, Style::default().fg(theme.conn_text)),
-        ])
-    };
-    f.render_widget(Paragraph::new(conn_line), header_chunks[1]);
+    let row2 = Line::from(vec![
+        Span::styled(mode_badge, Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" Ping: {:.2}ms", app.client.telemetry.metrics.ping_latency_ms), Style::default().fg(theme.text_secondary)),
+        Span::styled(role_or_nodes, Style::default().fg(theme.text_muted)),
+    ]);
 
-    // Layout & Focus indicator
     let focus_tag = if app.focused_pane == FocusedPane::RightDashboard {
         Span::styled(" [Right] ", Style::default().bg(theme.focus_right_bg).fg(theme.focus_right_fg).add_modifier(Modifier::BOLD))
     } else {
         Span::styled(" [Stream] ", Style::default().bg(theme.focus_stream_bg).fg(theme.focus_stream_fg))
     };
 
-    let layout_badge = if layout_len >= 34 {
-        Line::from(vec![
-            Span::styled(
-                format!(" Layout: {} ", app.layout_preset.name()),
-                Style::default().bg(theme.header_badge_bg).fg(theme.header_badge_fg),
-            ),
-            focus_tag,
-        ])
-    } else if layout_len >= 24 {
-        Line::from(vec![
-            Span::styled(
-                format!(" {} ", app.layout_preset.name()),
-                Style::default().bg(theme.header_badge_bg).fg(theme.header_badge_fg),
-            ),
-            focus_tag,
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                format!(" {} ", app.layout_preset.name().split_whitespace().next().unwrap_or("")),
-                Style::default().bg(theme.header_badge_bg).fg(theme.header_badge_fg),
-            ),
-            focus_tag,
-        ])
-    };
-    f.render_widget(Paragraph::new(layout_badge).alignment(ratatui::layout::Alignment::Right), header_chunks[2]);
+    let row3 = Line::from(vec![
+        Span::styled(
+            format!(" Layout: {} ", app.layout_preset.name()),
+            Style::default().bg(theme.header_badge_bg).fg(theme.header_badge_fg),
+        ),
+        Span::raw(" "),
+        focus_tag,
+        Span::styled(" · [F1] Help", Style::default().fg(theme.help_title_yellow)),
+    ]);
+
+    let middle_lines = vec![
+        Line::from(""), // Line 0: top padding aligned with ASCII logo roof
+        row1,           // Line 1: Version + Connection Status + Target URL
+        row2,           // Line 2: Mode ([Cluster Mode] / [Standalone Mode]) + Ping + Nodes/Role
+        Line::from(""), // Line 3: Spacing line between Cluster Mode and Layout
+        row3,           // Line 4: Layout Preset + Focused Pane + Help
+    ];
+    f.render_widget(Paragraph::new(middle_lines), banner_cols[1]);
+
+    // 3. Horizontal Separator Divider Line
+    if header_rows.len() > 1 && header_rows[1].height > 0 {
+        let divider_line = Line::from(vec![
+            Span::styled("─".repeat(w as usize), Style::default().fg(theme.divider)),
+        ]);
+        f.render_widget(Paragraph::new(divider_line), header_rows[1]);
+    }
 }
 
 fn render_right_pane(f: &mut Frame, area: Rect, app: &App, theme: &ThemePalette) {

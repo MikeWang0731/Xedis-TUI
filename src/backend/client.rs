@@ -699,9 +699,13 @@ impl XedisClient {
         match &mut self.backend {
             XedisBackend::Live(conn) => {
                 let ping_start = Instant::now();
-                if let Ok(pong) = redis::cmd("PING").query_async::<String>(conn).await {
-                    if pong == "PONG" {
+                match redis::cmd("PING").query_async::<String>(conn).await {
+                    Ok(pong) if pong == "PONG" => {
+                        self.telemetry.connected = true;
                         self.telemetry.metrics.ping_latency_ms = ping_start.elapsed().as_micros() as f64 / 1000.0;
+                    }
+                    _ => {
+                        self.telemetry.connected = false;
                     }
                 }
 
@@ -760,9 +764,13 @@ impl XedisClient {
             }
             XedisBackend::LiveCluster(conn) => {
                 let ping_start = Instant::now();
-                if let Ok(pong) = redis::cmd("PING").query_async::<String>(conn).await {
-                    if pong == "PONG" {
+                match redis::cmd("PING").query_async::<String>(conn).await {
+                    Ok(pong) if pong == "PONG" => {
+                        self.telemetry.connected = true;
                         self.telemetry.metrics.ping_latency_ms = ping_start.elapsed().as_micros() as f64 / 1000.0;
+                    }
+                    _ => {
+                        self.telemetry.connected = false;
                     }
                 }
 
