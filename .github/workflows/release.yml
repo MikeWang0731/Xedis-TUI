@@ -2,6 +2,16 @@ name: Build release binaries
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release 版本号，例如 v0.2.0；仅发布时必填"
+        required: false
+        type: string
+      publish_release:
+        description: "构建完成后创建 GitHub Release"
+        required: true
+        default: false
+        type: boolean
   push:
     tags:
       - "v*"
@@ -116,12 +126,24 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: github.ref_type == 'tag'
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
     steps:
+      - name: Validate release version
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::版本号格式不正确：$RELEASE_TAG；请使用 v0.2.0 或 v0.2.0-beta.1"
+            exit 1
+          fi
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -133,7 +155,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Xedis-TUI $RELEASE_TAG" \
+              --generate-notes
           fi
-          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
