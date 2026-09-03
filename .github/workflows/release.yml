@@ -1,0 +1,94 @@
+name: Release Multi-Platform Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Apple Silicon
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            archive_ext: tar.gz
+          # macOS Intel
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use_cross: false
+            archive_ext: tar.gz
+          # Linux x86_64 (musl 静态链接)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+            archive_ext: tar.gz
+          # Linux ARM64 (musl 静态链接)
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+            archive_ext: tar.gz
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
+            archive_ext: zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for musl/cross compilation)
+        if: matrix.use_cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build Binary
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          BIN_NAME="xedis-tui"
+          TAG_NAME="${{ github.ref_name }}"
+          ARCHIVE_NAME="xedis-tui-${TAG_NAME}-${{ matrix.target }}"
+          
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "target/${{ matrix.target }}/release/${BIN_NAME}.exe" dist/
+            cd dist
+            7z a "${ARCHIVE_NAME}.zip" "${BIN_NAME}.exe"
+            echo "ASSET=dist/${ARCHIVE_NAME}.zip" >> $GITHUB_ENV
+          else
+            cp "target/${{ matrix.target }}/release/${BIN_NAME}" dist/
+            cd dist
+            tar -czvf "${ARCHIVE_NAME}.tar.gz" "${BIN_NAME}"
+            echo "ASSET=dist/${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
