@@ -48,27 +48,22 @@ jobs:
             runner: windows-latest
             target: x86_64-pc-windows-msvc
             asset: xedis-tui-windows-x86_64.zip
-            artifact: xedis-tui-windows-x86_64
           - platform: macOS x86_64
             runner: macos-15-intel
             target: x86_64-apple-darwin
             asset: xedis-tui-macos-x86_64.tar.gz
-            artifact: xedis-tui-macos-x86_64
           - platform: macOS ARM64
             runner: macos-15
             target: aarch64-apple-darwin
             asset: xedis-tui-macos-aarch64.tar.gz
-            artifact: xedis-tui-macos-aarch64
           - platform: Linux x86_64
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             asset: xedis-tui-linux-x86_64.tar.gz
-            artifact: xedis-tui-linux-x86_64
           - platform: Linux ARM64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             asset: xedis-tui-linux-aarch64.tar.gz
-            artifact: xedis-tui-linux-aarch64
 
     runs-on: ${{ matrix.runner }}
 
@@ -119,8 +114,8 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
           path: ${{ matrix.asset }}
+          archive: false
           if-no-files-found: error
           retention-days: 14
 
@@ -135,6 +130,7 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Validate release version
         shell: bash

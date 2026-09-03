@@ -46,6 +46,8 @@
 
 ## 🖥️ 快速开始
 
+> 在 [Github Release](https://github.com/MikeWang0731/Xedis-TUI/releases) 内下载对应平台的文件，解压后可以直接运行
+
 ### 前置要求
 
 - 安装 [Rust 工具链](https://rustup.rs/) (Rust 1.75+)
@@ -96,24 +98,6 @@ cross build --release --target aarch64-unknown-linux-musl
 
 # 5. 编译 Windows x86_64 二进制 (GNU 工具链)
 cross build --release --target x86_64-pc-windows-gnu
-```
-
-### GitHub Actions 多平台构建
-
-仓库内的 `Build release binaries` workflow 会构建以下 5 个发布包：
-
-- Windows x86_64（`.zip`）
-- macOS x86_64 / ARM64（`.tar.gz`）
-- Linux x86_64 / ARM64（musl 静态链接，`.tar.gz`）
-
-有两种触发方式：
-
-1. 在 GitHub 仓库的 **Actions → Build release binaries → Run workflow** 中手动运行。构建结果可在该次运行页面的 **Artifacts** 区域下载。
-2. 推送形如 `v0.1.0` 的 tag，workflow 会自动创建同名 GitHub Release 并上传全部构建包：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
 ```
 
 ### 常用启动参数(假设编译好的二进制文件叫 `xedis-tui`)
