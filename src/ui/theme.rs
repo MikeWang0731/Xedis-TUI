@@ -49,6 +49,7 @@ pub struct ThemePalette {
     pub conn_text: Color,
     pub conn_cluster: Color,
     pub conn_standalone: Color,
+    pub conn_sentinel: Color,
     pub header_badge_bg: Color,
     pub header_badge_fg: Color,
     pub focus_right_bg: Color,
@@ -124,6 +125,9 @@ pub struct ThemePalette {
     pub shard_node_id: Color,
     pub shard_slot_label: Color,
     pub shard_slot_range: Color,
+    pub sentinel_border: Color,
+    pub sentinel_peer_title: Color,
+    pub sentinel_myself_title: Color,
 
     // Slowlog View
     pub slowlog_border: Color,
@@ -209,6 +213,7 @@ impl ThemePalette {
             conn_text: Color::White,
             conn_cluster: Color::Rgb(180, 160, 255),
             conn_standalone: Color::Cyan,
+            conn_sentinel: Color::Rgb(245, 158, 11),
             header_badge_bg: Color::Rgb(20, 30, 50),
             header_badge_fg: Color::Cyan,
             focus_right_bg: Color::Rgb(40, 30, 80),
@@ -284,6 +289,9 @@ impl ThemePalette {
             shard_node_id: Color::Rgb(180, 160, 255),
             shard_slot_label: Color::Yellow,
             shard_slot_range: Color::Yellow,
+            sentinel_border: Color::Rgb(217, 119, 6),
+            sentinel_peer_title: Color::Rgb(251, 191, 36),
+            sentinel_myself_title: Color::Rgb(180, 130, 45),
 
             // Slowlog View
             slowlog_border: Color::Yellow,
@@ -369,6 +377,7 @@ impl ThemePalette {
             conn_text: Color::Rgb(15, 23, 42),
             conn_cluster: Color::Rgb(109, 40, 217),    // Violet-700
             conn_standalone: Color::Rgb(3, 105, 161),  // Sky-700
+            conn_sentinel: Color::Rgb(180, 83, 9),     // Amber-700
             header_badge_bg: Color::Rgb(241, 245, 249),// Slate-100
             header_badge_fg: Color::Rgb(2, 132, 199),
             focus_right_bg: Color::Rgb(237, 233, 254), // Violet-100
@@ -444,6 +453,9 @@ impl ThemePalette {
             shard_node_id: Color::Rgb(109, 40, 217),
             shard_slot_label: Color::Rgb(180, 83, 9),
             shard_slot_range: Color::Rgb(180, 83, 9),
+            sentinel_border: Color::Rgb(217, 119, 6),
+            sentinel_peer_title: Color::Rgb(146, 64, 14),
+            sentinel_myself_title: Color::Rgb(190, 120, 60),
 
             // Slowlog View
             slowlog_border: Color::Rgb(202, 138, 4),

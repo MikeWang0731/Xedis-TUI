@@ -257,10 +257,10 @@ impl MacroEngine {
         FormattedValue::Table { headers, rows }
     }
 
-    pub fn format_settings(
+    pub fn format_settings_with_mode(
         host: &str,
         port: u16,
-        is_cluster: bool,
+        mode_str: &str,
         layout_name: &str,
         theme_name: &str,
         interval_ms: u64,
@@ -272,7 +272,6 @@ impl MacroEngine {
             "Description".to_string(),
         ];
 
-        let mode_str = if is_cluster { "Cluster Mode" } else { "Standalone / Sentinel" };
         let poll_str = if is_paused || interval_ms == 0 {
             "Paused (0ms)".to_string()
         } else if interval_ms >= 1000 && interval_ms % 1000 == 0 {
@@ -283,7 +282,7 @@ impl MacroEngine {
 
         let rows = vec![
             vec!["Server Address".to_string(), format!("{}:{}", host, port), "Target Redis connection endpoint".to_string()],
-            vec!["Protocol Mode".to_string(), mode_str.to_string(), "Standalone single-node or distributed Cluster topology".to_string()],
+            vec!["Protocol Mode".to_string(), mode_str.to_string(), "Active Redis topology mode (Standalone, Cluster, or Sentinel)".to_string()],
             vec!["Layout Preset".to_string(), layout_name.to_string(), "Current viewport split ratio (toggle via F5 / Ctrl+B)".to_string()],
             vec!["UI Color Theme".to_string(), theme_name.to_string(), "Active color palette: Dark / Light (/theme [mode])".to_string()],
             vec!["Telemetry Polling".to_string(), poll_str, "Sampling interval for QPS, CPU, Memory, Slowlog (/interval [val])".to_string()],
@@ -291,6 +290,28 @@ impl MacroEngine {
         ];
 
         FormattedValue::Table { headers, rows }
+    }
+
+    #[allow(dead_code)]
+    pub fn format_settings(
+        host: &str,
+        port: u16,
+        is_cluster: bool,
+        layout_name: &str,
+        theme_name: &str,
+        interval_ms: u64,
+        is_paused: bool,
+    ) -> FormattedValue {
+        let mode_str = if is_cluster { "Cluster Mode" } else { "Standalone / Sentinel" };
+        Self::format_settings_with_mode(
+            host,
+            port,
+            mode_str,
+            layout_name,
+            theme_name,
+            interval_ms,
+            is_paused,
+        )
     }
 
     pub fn suggest_for_slow_command(cmd: &str) -> Option<String> {

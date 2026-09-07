@@ -52,6 +52,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub cluster_mode: bool,
     #[serde(default)]
+    pub sentinel_mode: bool,
+    #[serde(default)]
     pub default_layout: LayoutPreset,
     #[serde(default)]
     pub theme: ThemeMode,
@@ -90,6 +92,7 @@ impl Default for AppConfig {
             port: default_port(),
             password: None,
             cluster_mode: false,
+            sentinel_mode: false,
             default_layout: LayoutPreset::Balanced,
             theme: ThemeMode::default(),
             poll_interval_ms: default_poll_interval_ms(),

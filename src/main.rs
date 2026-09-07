@@ -36,6 +36,10 @@ struct CliArgs {
     #[arg(short = 'c', long, default_value_t = false)]
     cluster: bool,
 
+    /// Enable Redis Sentinel mode
+    #[arg(short = 's', long, default_value_t = false)]
+    sentinel: bool,
+
     /// Initial layout preset (balanced, focus, monitor, zen)
     #[arg(long, value_enum, default_value = "balanced")]
     preset: Option<String>,
@@ -54,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.port = args.port;
     config.password = args.password;
     config.cluster_mode = args.cluster;
+    config.sentinel_mode = args.sentinel;
 
     if let Some(preset_str) = args.preset {
         config.default_layout = match preset_str.to_lowercase().as_str() {

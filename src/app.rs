@@ -57,7 +57,7 @@ impl App {
             Some(pwd) if !pwd.is_empty() => format!("redis://:{}@{}:{}", pwd, config.host, config.port),
             _ => format!("redis://{}:{}", config.host, config.port),
         };
-        let client = XedisClient::connect(&conn_url, config.cluster_mode).await;
+        let client = XedisClient::connect_ext(&conn_url, config.cluster_mode, config.sentinel_mode).await;
 
         let initial_records = Vec::new();
 
@@ -586,10 +586,21 @@ impl App {
                     (res, start.elapsed())
                 } else if lower_name == "/settings" || lower_name == "/config" {
                     let start = Instant::now();
-                    let res = MacroEngine::format_settings(
+                    let mode_str = match self.client.telemetry.topology.mode {
+                        crate::backend::cluster_info::RedisTopologyMode::Sentinel => "Sentinel Mode",
+                        crate::backend::cluster_info::RedisTopologyMode::Cluster => "Cluster Mode",
+                        crate::backend::cluster_info::RedisTopologyMode::Standalone => {
+                            if self.client.telemetry.is_cluster {
+                                "Cluster Mode"
+                            } else {
+                                "Standalone Mode"
+                            }
+                        }
+                    };
+                    let res = MacroEngine::format_settings_with_mode(
                         &self.config.host,
                         self.config.port,
-                        self.client.telemetry.is_cluster,
+                        mode_str,
                         self.layout_preset.name(),
                         self.config.theme.name(),
                         self.poll_interval.as_millis() as u64,

@@ -73,8 +73,62 @@ impl Default for ReplicationInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RedisTopologyMode {
+    #[default]
+    Standalone,
+    Cluster,
+    Sentinel,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SentinelSlaveInfo {
+    pub ip: String,
+    pub port: u16,
+    pub flags: String,
+    pub link_status: String,
+    pub repl_offset: u64,
+    pub lag_sec: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SentinelPeerInfo {
+    pub id: String,
+    pub ip: String,
+    pub port: u16,
+    pub flags: String,
+    pub is_healthy: bool,
+    pub last_ok_ping_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SentinelMasterInfo {
+    pub name: String,
+    pub ip: String,
+    pub port: u16,
+    pub status: String,
+    pub flags: String,
+    pub quorum: u32,
+    pub num_slaves: usize,
+    pub num_other_sentinels: usize,
+    pub down_after_ms: u64,
+    pub failover_timeout_ms: u64,
+    pub slaves: Vec<SentinelSlaveInfo>,
+    pub sentinels: Vec<SentinelPeerInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SentinelTopology {
+    pub masters: Vec<SentinelMasterInfo>,
+    pub total_sentinels: usize,
+    pub tilt_mode: bool,
+    pub running_scripts: usize,
+    pub my_sentinel: Option<SentinelPeerInfo>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClusterTopology {
+    pub mode: RedisTopologyMode,
     pub shards: Vec<ClusterShard>,
     pub standalone_nodes: Vec<ClusterNode>,
     pub total_nodes: usize,
@@ -83,6 +137,7 @@ pub struct ClusterTopology {
     pub is_fully_covered: bool,
     pub is_cluster: bool,
     pub replication: Option<ReplicationInfo>,
+    pub sentinel: Option<SentinelTopology>,
 }
 
 impl Default for ClusterTopology {
@@ -211,6 +266,7 @@ impl ClusterTopology {
         ];
 
         Self {
+            mode: RedisTopologyMode::Cluster,
             shards,
             standalone_nodes: Vec::new(),
             total_nodes: 6,
@@ -219,6 +275,7 @@ impl ClusterTopology {
             is_fully_covered: true,
             is_cluster: true,
             replication: None,
+            sentinel: None,
         }
     }
 
@@ -240,6 +297,7 @@ impl ClusterTopology {
         };
 
         Self {
+            mode: RedisTopologyMode::Standalone,
             shards: Vec::new(),
             standalone_nodes: vec![node],
             total_nodes: 1,
@@ -248,6 +306,107 @@ impl ClusterTopology {
             is_fully_covered: true,
             is_cluster: false,
             replication: Some(ReplicationInfo::default()),
+            sentinel: None,
+        }
+    }
+
+    pub fn mock_sentinel_topology() -> Self {
+        let slaves = vec![
+            SentinelSlaveInfo {
+                ip: "127.0.0.1".to_string(),
+                port: 6380,
+                flags: "slave".to_string(),
+                link_status: "ok".to_string(),
+                repl_offset: 142980,
+                lag_sec: 0,
+            },
+            SentinelSlaveInfo {
+                ip: "127.0.0.1".to_string(),
+                port: 6381,
+                flags: "slave".to_string(),
+                link_status: "ok".to_string(),
+                repl_offset: 142980,
+                lag_sec: 1,
+            },
+        ];
+
+        let sentinels = vec![
+            SentinelPeerInfo {
+                id: "sentinel-2".to_string(),
+                ip: "127.0.0.1".to_string(),
+                port: 26380,
+                flags: "sentinel".to_string(),
+                is_healthy: true,
+                last_ok_ping_ms: 180,
+            },
+            SentinelPeerInfo {
+                id: "sentinel-3".to_string(),
+                ip: "127.0.0.1".to_string(),
+                port: 26381,
+                flags: "sentinel".to_string(),
+                is_healthy: true,
+                last_ok_ping_ms: 240,
+            },
+        ];
+
+        let master = SentinelMasterInfo {
+            name: "mymaster".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: 6379,
+            status: "ok".to_string(),
+            flags: "master".to_string(),
+            quorum: 2,
+            num_slaves: 2,
+            num_other_sentinels: 2,
+            down_after_ms: 30000,
+            failover_timeout_ms: 180000,
+            slaves,
+            sentinels,
+        };
+
+        let my_sentinel = SentinelPeerInfo {
+            id: "sentinel-1".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: 26379,
+            flags: "sentinel".to_string(),
+            is_healthy: true,
+            last_ok_ping_ms: 0,
+        };
+
+        let sentinel_topo = SentinelTopology {
+            masters: vec![master],
+            total_sentinels: 3,
+            tilt_mode: false,
+            running_scripts: 0,
+            my_sentinel: Some(my_sentinel),
+        };
+
+        let sentinel_node = ClusterNode {
+            id: "sentinel-1".to_string(),
+            raw_id: "sentinel_instance_26379".to_string(),
+            address: "127.0.0.1:26379".to_string(),
+            cport: 0,
+            role: "Sentinel".to_string(),
+            master_id: None,
+            is_healthy: true,
+            ping_ms: 0.42,
+            slots_raw: "Quorum: 2 (3 in total) (Monitoring: mymaster)".to_string(),
+            slot_ranges: Vec::new(),
+            slot_count: 0,
+            key_count: 0,
+        };
+
+        Self {
+            mode: RedisTopologyMode::Sentinel,
+            shards: Vec::new(),
+            standalone_nodes: vec![sentinel_node],
+            total_nodes: 3,
+            healthy_nodes: 3,
+            covered_slots: 0,
+            is_fully_covered: true,
+            is_cluster: false,
+            replication: None,
+            sentinel: Some(sentinel_topo),
         }
     }
 }
@@ -393,6 +552,7 @@ impl ClusterTopologyParser {
         let is_fully_covered = covered_slots == 16384;
 
         ClusterTopology {
+            mode: RedisTopologyMode::Cluster,
             shards,
             standalone_nodes: Vec::new(),
             total_nodes,
@@ -401,6 +561,7 @@ impl ClusterTopologyParser {
             is_fully_covered,
             is_cluster: true,
             replication: None,
+            sentinel: None,
         }
     }
 
@@ -470,5 +631,164 @@ impl ClusterTopologyParser {
             master_link_status,
             master_repl_offset,
         }
+    }
+
+    pub fn parse_info_sentinel(raw_str: &str) -> SentinelTopology {
+        let mut total_sentinels = 1;
+        let mut tilt_mode = false;
+        let mut running_scripts = 0;
+        let mut masters = Vec::new();
+
+        for line in raw_str.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some((k, v)) = line.split_once(':') {
+                let k_trimmed = k.trim();
+                let v_trimmed = v.trim();
+                match k_trimmed {
+                    "sentinel_tilt" => tilt_mode = v_trimmed == "1",
+                    "sentinel_running_scripts" => running_scripts = v_trimmed.parse().unwrap_or(0),
+                    _ if k_trimmed.starts_with("master") => {
+                        // master0:name=mymaster,status=ok,address=127.0.0.1:6379,slaves=2,sentinels=3
+                        let mut name = "mymaster".to_string();
+                        let mut status = "ok".to_string();
+                        let mut ip = "127.0.0.1".to_string();
+                        let mut port = 6379u16;
+                        let mut slaves_cnt = 0usize;
+                        let mut sentinels_cnt = 1usize;
+
+                        for part in v_trimmed.split(',') {
+                            if let Some((sub_k, sub_v)) = part.split_once('=') {
+                                match sub_k.trim() {
+                                    "name" => name = sub_v.trim().to_string(),
+                                    "status" => status = sub_v.trim().to_string(),
+                                    "address" => {
+                                        if let Some((addr_ip, addr_port)) = sub_v.trim().split_once(':') {
+                                            ip = addr_ip.to_string();
+                                            port = addr_port.parse().unwrap_or(6379);
+                                        }
+                                    }
+                                    "slaves" => slaves_cnt = sub_v.trim().parse().unwrap_or(0),
+                                    "sentinels" => {
+                                        sentinels_cnt = sub_v.trim().parse().unwrap_or(1);
+                                        total_sentinels = total_sentinels.max(sentinels_cnt);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        masters.push(SentinelMasterInfo {
+                            name,
+                            ip,
+                            port,
+                            status,
+                            flags: "master".to_string(),
+                            quorum: 2,
+                            num_slaves: slaves_cnt,
+                            num_other_sentinels: sentinels_cnt.saturating_sub(1),
+                            down_after_ms: 30000,
+                            failover_timeout_ms: 180000,
+                            slaves: Vec::new(),
+                            sentinels: Vec::new(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        SentinelTopology {
+            masters,
+            total_sentinels,
+            tilt_mode,
+            running_scripts,
+            my_sentinel: None,
+        }
+    }
+
+    pub fn parse_sentinel_masters_entries(entries: &[std::collections::HashMap<String, String>]) -> Vec<SentinelMasterInfo> {
+        let mut masters = Vec::new();
+        for map in entries {
+            let name = map.get("name").cloned().unwrap_or_else(|| "mymaster".to_string());
+            let ip = map.get("ip").cloned().unwrap_or_else(|| "127.0.0.1".to_string());
+            let port = map.get("port").and_then(|p| p.parse().ok()).unwrap_or(6379);
+            let flags = map.get("flags").cloned().unwrap_or_else(|| "master".to_string());
+            let status = if flags.contains("odown") {
+                "odown".to_string()
+            } else if flags.contains("sdown") {
+                "sdown".to_string()
+            } else {
+                "ok".to_string()
+            };
+            let quorum = map.get("quorum").and_then(|q| q.parse().ok()).unwrap_or(2);
+            let num_slaves = map.get("num-slaves").and_then(|s| s.parse().ok()).unwrap_or(0);
+            let num_other_sentinels = map.get("num-other-sentinels").and_then(|s| s.parse().ok()).unwrap_or(0);
+            let down_after_ms = map.get("down-after-milliseconds").and_then(|d| d.parse().ok()).unwrap_or(30000);
+            let failover_timeout_ms = map.get("failover-timeout").and_then(|f| f.parse().ok()).unwrap_or(180000);
+
+            masters.push(SentinelMasterInfo {
+                name,
+                ip,
+                port,
+                status,
+                flags,
+                quorum,
+                num_slaves,
+                num_other_sentinels,
+                down_after_ms,
+                failover_timeout_ms,
+                slaves: Vec::new(),
+                sentinels: Vec::new(),
+            });
+        }
+        masters
+    }
+
+    pub fn parse_sentinel_slaves_entries(entries: &[std::collections::HashMap<String, String>]) -> Vec<SentinelSlaveInfo> {
+        let mut slaves = Vec::new();
+        for map in entries {
+            let ip = map.get("ip").cloned().unwrap_or_else(|| "127.0.0.1".to_string());
+            let port = map.get("port").and_then(|p| p.parse().ok()).unwrap_or(6379);
+            let flags = map.get("flags").cloned().unwrap_or_else(|| "slave".to_string());
+            let link_status = map.get("master-link-status").cloned().unwrap_or_else(|| "ok".to_string());
+            let repl_offset = map.get("slave-repl-offset").and_then(|o| o.parse().ok()).unwrap_or(0);
+            let lag_sec = map.get("master-link-down-time").and_then(|l| l.parse::<u64>().ok()).map(|ms| ms / 1000).unwrap_or(0);
+
+            slaves.push(SentinelSlaveInfo {
+                ip,
+                port,
+                flags,
+                link_status,
+                repl_offset,
+                lag_sec,
+            });
+        }
+        slaves
+    }
+
+    pub fn parse_sentinel_peers_entries(entries: &[std::collections::HashMap<String, String>]) -> Vec<SentinelPeerInfo> {
+        let mut peers = Vec::new();
+        for map in entries {
+            let id = map.get("name").or_else(|| map.get("runid")).cloned().unwrap_or_else(|| "sentinel-peer".to_string());
+            let ip = map.get("ip").cloned().unwrap_or_else(|| "127.0.0.1".to_string());
+            let port = map.get("port").and_then(|p| p.parse().ok()).unwrap_or(26379);
+            let flags = map.get("flags").cloned().unwrap_or_else(|| "sentinel".to_string());
+            let is_healthy = !flags.contains("sdown") && !flags.contains("disconnected");
+            let last_ok_ping_ms = map.get("last-ok-ping-reply").and_then(|p| p.parse().ok()).unwrap_or(0);
+
+            peers.push(SentinelPeerInfo {
+                id,
+                ip,
+                port,
+                flags,
+                is_healthy,
+                last_ok_ping_ms,
+            });
+        }
+        peers
     }
 }

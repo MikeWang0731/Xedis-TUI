@@ -143,13 +143,24 @@ fn render_header(f: &mut Frame, area: Rect, app: &App, theme: &ThemePalette) {
         Span::styled(format!(" {} ", &app.client.telemetry.server_desc), Style::default().fg(theme.conn_text).add_modifier(Modifier::BOLD)),
     ]);
 
-    let (mode_badge, mode_color) = if app.client.telemetry.is_cluster {
+    let is_sentinel = app.client.telemetry.topology.mode == crate::backend::cluster_info::RedisTopologyMode::Sentinel
+        || app.client.telemetry.metrics.redis_mode == "sentinel";
+
+    let (mode_badge, mode_color) = if is_sentinel {
+        (" [Sentinel Mode] ", theme.conn_sentinel)
+    } else if app.client.telemetry.is_cluster {
         (" [Cluster Mode] ", theme.conn_cluster)
     } else {
         (" [Standalone Mode] ", theme.conn_standalone)
     };
 
-    let role_or_nodes = if app.client.telemetry.is_cluster {
+    let role_or_nodes = if is_sentinel {
+        if let Some(sent) = &app.client.telemetry.topology.sentinel {
+            format!(" · Masters: {} · Sentinels: {}", sent.masters.len(), sent.total_sentinels)
+        } else {
+            " · Sentinel Watcher".to_string()
+        }
+    } else if app.client.telemetry.is_cluster {
         format!(" · Nodes: {}", app.client.telemetry.topology.total_nodes)
     } else {
         let role = app.client.telemetry.topology.replication.as_ref().map(|r| r.role.as_str()).unwrap_or("master");

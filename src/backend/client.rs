@@ -1,4 +1,4 @@
-use crate::backend::cluster_info::{ClusterNode, ClusterTopology, ClusterTopologyParser};
+use crate::backend::cluster_info::{ClusterNode, ClusterTopology, ClusterTopologyParser, RedisTopologyMode, SentinelPeerInfo, SentinelTopology};
 use crate::backend::formatter::FormattedValue;
 use crate::core::macro_engine::MacroEngine;
 use crate::core::telemetry::{MetricsHistory, TelemetryMetrics, TelemetryParser};
@@ -143,7 +143,12 @@ pub struct XedisClient {
 }
 
 impl XedisClient {
+    #[allow(dead_code)]
     pub async fn connect(url: &str, is_cluster: bool) -> Self {
+        Self::connect_ext(url, is_cluster, false).await
+    }
+
+    pub async fn connect_ext(url: &str, is_cluster: bool, is_sentinel: bool) -> Self {
         if is_cluster {
             if let Ok(client) = redis::cluster::ClusterClient::new(vec![url]) {
                 if let Ok(conn) = client.get_async_connection().await {
@@ -156,7 +161,18 @@ impl XedisClient {
                             server_desc: url.to_string(),
                             metrics: TelemetryMetrics::empty(),
                             history: MetricsHistory::new_empty(60),
-                            topology: ClusterTopology::default(),
+                            topology: ClusterTopology {
+                                mode: RedisTopologyMode::Cluster,
+                                shards: Vec::new(),
+                                standalone_nodes: Vec::new(),
+                                total_nodes: 0,
+                                healthy_nodes: 0,
+                                covered_slots: 0,
+                                is_fully_covered: false,
+                                is_cluster: true,
+                                replication: None,
+                                sentinel: None,
+                            },
                             slowlogs: Vec::new(),
                             last_poll_time: None,
                         },
@@ -167,6 +183,11 @@ impl XedisClient {
             }
         } else if let Ok(client) = redis::Client::open(url) {
             if let Ok(conn) = client.get_multiplexed_tokio_connection().await {
+                let init_mode = if is_sentinel {
+                    RedisTopologyMode::Sentinel
+                } else {
+                    RedisTopologyMode::Standalone
+                };
                 let mut client_obj = Self {
                     target_url: url.to_string(),
                     backend: XedisBackend::Live(conn),
@@ -176,7 +197,18 @@ impl XedisClient {
                         server_desc: url.to_string(),
                         metrics: TelemetryMetrics::empty(),
                         history: MetricsHistory::new_empty(60),
-                        topology: ClusterTopology::default(),
+                        topology: ClusterTopology {
+                            mode: init_mode,
+                            shards: Vec::new(),
+                            standalone_nodes: Vec::new(),
+                            total_nodes: 0,
+                            healthy_nodes: 0,
+                            covered_slots: 0,
+                            is_fully_covered: false,
+                            is_cluster: false,
+                            replication: None,
+                            sentinel: if is_sentinel { Some(SentinelTopology::default()) } else { None },
+                        },
                         slowlogs: Vec::new(),
                         last_poll_time: None,
                     },
@@ -187,9 +219,19 @@ impl XedisClient {
         }
 
         // Graceful fallback to Demo / Offline mock mode for immediate UI preview when no server is online
-        let mut telemetry = TelemetryData::default();
-        telemetry.connected = false;
-        telemetry.server_desc = format!("{} [OFFLINE / DEMO PREVIEW]", url);
+        let telemetry = if is_sentinel {
+            let mut t = TelemetryData::default();
+            t.connected = false;
+            t.is_cluster = false;
+            t.server_desc = format!("{} [OFFLINE / DEMO PREVIEW]", url);
+            t.topology = ClusterTopology::mock_sentinel_topology();
+            t
+        } else {
+            let mut t = TelemetryData::default();
+            t.connected = false;
+            t.server_desc = format!("{} [OFFLINE / DEMO PREVIEW]", url);
+            t
+        };
         Self {
             target_url: url.to_string(),
             backend: XedisBackend::DemoMock,
@@ -206,7 +248,7 @@ impl XedisClient {
         let all_nodes = self.telemetry.nodes();
         let target_lower = target.to_lowercase();
         if target_lower == "all" || target_lower == "cluster" {
-            if all_nodes.is_empty() {
+            if all_nodes.is_empty() || self.telemetry.topology.shards.is_empty() {
                 return ClusterTopology::mock_cluster_topology()
                     .shards
                     .iter()
@@ -220,7 +262,7 @@ impl XedisClient {
                 .filter(|n| n.role.eq_ignore_ascii_case("Master"))
                 .cloned()
                 .collect();
-            if masters.is_empty() {
+            if masters.is_empty() || self.telemetry.topology.shards.is_empty() {
                 ClusterTopology::mock_cluster_topology()
                     .shards
                     .into_iter()
@@ -326,9 +368,10 @@ impl XedisClient {
             }
             "INFO" => {
                 let port = node.address.split(':').nth(1).unwrap_or("6379");
+                let mode_str = if node.role == "Sentinel" { "sentinel" } else { "cluster" };
                 FormattedValue::String(format!(
-                    "# Server\nredis_version:7.2.4\nredis_mode:cluster\ntcp_port:{}\nrun_id:{}\nrole:{}\n\n# Memory\nused_memory_human:2.14G\nmaxmemory_human:4.00G",
-                    port, node.raw_id, node.role.to_lowercase()
+                    "# Server\nredis_version:7.2.4\nredis_mode:{}\ntcp_port:{}\nrun_id:{}\nrole:{}\n\n# Memory\nused_memory_human:2.14G\nmaxmemory_human:4.00G",
+                    mode_str, port, node.raw_id, node.role.to_lowercase()
                 ))
             }
             "CLUSTER" => {
@@ -340,6 +383,31 @@ impl XedisClient {
                     )
                 } else {
                     FormattedValue::Status("OK".to_string())
+                }
+            }
+            "SENTINEL" => {
+                let sub = args.first().map(|s| s.to_uppercase()).unwrap_or_default();
+                match sub.as_str() {
+                    "MASTERS" => FormattedValue::Table {
+                        headers: vec!["Name".to_string(), "IP".to_string(), "Port".to_string(), "Status".to_string(), "Quorum".to_string(), "Slaves".to_string(), "Sentinels".to_string()],
+                        rows: vec![vec!["mymaster".to_string(), "127.0.0.1".to_string(), "6379".to_string(), "ok".to_string(), "2".to_string(), "2".to_string(), "2".to_string()]],
+                    },
+                    "SLAVES" => FormattedValue::Table {
+                        headers: vec!["IP".to_string(), "Port".to_string(), "Flags".to_string(), "Link Status".to_string(), "Repl Offset".to_string()],
+                        rows: vec![
+                            vec!["127.0.0.1".to_string(), "6380".to_string(), "slave".to_string(), "ok".to_string(), "142980".to_string()],
+                            vec!["127.0.0.1".to_string(), "6381".to_string(), "slave".to_string(), "ok".to_string(), "142980".to_string()],
+                        ],
+                    },
+                    "SENTINELS" => FormattedValue::Table {
+                        headers: vec!["Name".to_string(), "IP".to_string(), "Port".to_string(), "Flags".to_string(), "Last Ping Reply".to_string()],
+                        rows: vec![
+                            vec!["sentinel-2".to_string(), "127.0.0.1".to_string(), "26380".to_string(), "sentinel".to_string(), "180ms".to_string()],
+                            vec!["sentinel-3".to_string(), "127.0.0.1".to_string(), "26381".to_string(), "sentinel".to_string(), "240ms".to_string()],
+                        ],
+                    },
+                    "CKQUORUM" => FormattedValue::Status("OK 3 usable Sentinels. Quorum calculated is 2".to_string()),
+                    _ => FormattedValue::Status("OK (Simulated Sentinel Response)".to_string()),
                 }
             }
             _ => FormattedValue::Status(format!("OK (Simulated response for {} on @{})", cmd, node.id)),
@@ -746,7 +814,84 @@ impl XedisClient {
                     }
                 }
 
-                if let Ok(repl_str) = redis::cmd("INFO").arg("replication").query_async::<String>(conn).await {
+                let is_sentinel = self.telemetry.metrics.redis_mode == "sentinel"
+                    || self.telemetry.topology.mode == RedisTopologyMode::Sentinel;
+
+                if is_sentinel {
+                    self.telemetry.topology.mode = RedisTopologyMode::Sentinel;
+                    let mut collected_sentinel = String::new();
+                    if let Ok(val) = redis::cmd("INFO").arg("sentinel").query_async::<redis::Value>(conn).await {
+                        collected_sentinel = Self::redis_value_to_string(&val);
+                    }
+                    if !collected_sentinel.is_empty() {
+                        let mut sent_topo = ClusterTopologyParser::parse_info_sentinel(&collected_sentinel);
+
+                        // Enrich with SENTINEL masters command
+                        if let Ok(masters_val) = redis::cmd("SENTINEL").arg("masters").query_async::<redis::Value>(conn).await {
+                            let master_maps = Self::parse_sentinel_kv_entries(&masters_val);
+                            let parsed_masters = ClusterTopologyParser::parse_sentinel_masters_entries(&master_maps);
+                            if !parsed_masters.is_empty() {
+                                sent_topo.masters = parsed_masters;
+                            }
+                        }
+
+                        // For each master, pull slaves and peer sentinels
+                        for m in &mut sent_topo.masters {
+                            if let Ok(slaves_val) = redis::cmd("SENTINEL").arg("slaves").arg(&m.name).query_async::<redis::Value>(conn).await {
+                                let slave_maps = Self::parse_sentinel_kv_entries(&slaves_val);
+                                let parsed_slaves = ClusterTopologyParser::parse_sentinel_slaves_entries(&slave_maps);
+                                if !parsed_slaves.is_empty() {
+                                    m.slaves = parsed_slaves;
+                                    m.num_slaves = m.slaves.len();
+                                }
+                            }
+                            if let Ok(peers_val) = redis::cmd("SENTINEL").arg("sentinels").arg(&m.name).query_async::<redis::Value>(conn).await {
+                                let peer_maps = Self::parse_sentinel_kv_entries(&peers_val);
+                                let parsed_peers = ClusterTopologyParser::parse_sentinel_peers_entries(&peer_maps);
+                                if !parsed_peers.is_empty() {
+                                    m.sentinels = parsed_peers;
+                                    m.num_other_sentinels = m.sentinels.len();
+                                }
+                            }
+                        }
+
+                        let url_str = self.target_url.trim_start_matches("redis://").trim_start_matches("rediss://");
+                        let host_port = url_str.split('@').last().unwrap_or(url_str).split('/').next().unwrap_or(url_str);
+                        let (host, port) = if let Some((h, p)) = host_port.split_once(':') {
+                            (h.to_string(), p.parse::<u16>().unwrap_or(26379))
+                        } else {
+                            ("127.0.0.1".to_string(), 26379)
+                        };
+                        let ping_ms = self.telemetry.metrics.ping_latency_ms;
+                        sent_topo.my_sentinel = Some(SentinelPeerInfo {
+                            id: "myself".to_string(),
+                            ip: host.clone(),
+                            port,
+                            flags: "sentinel".to_string(),
+                            is_healthy: self.telemetry.connected,
+                            last_ok_ping_ms: ping_ms.round() as u64,
+                        });
+
+                        if self.telemetry.topology.standalone_nodes.is_empty() {
+                            self.telemetry.topology.standalone_nodes.push(ClusterNode {
+                                id: "myself".to_string(),
+                                raw_id: "myself".to_string(),
+                                address: format!("{}:{}", host, port),
+                                cport: 0,
+                                role: "Sentinel".to_string(),
+                                master_id: None,
+                                is_healthy: self.telemetry.connected,
+                                ping_ms,
+                                slots_raw: String::new(),
+                                slot_ranges: Vec::new(),
+                                slot_count: 0,
+                                key_count: 0,
+                            });
+                        }
+
+                        self.telemetry.topology.sentinel = Some(sent_topo);
+                    }
+                } else if let Ok(repl_str) = redis::cmd("INFO").arg("replication").query_async::<String>(conn).await {
                     self.telemetry.topology.replication = Some(ClusterTopologyParser::parse_info_replication(&repl_str));
                 }
                 if let Ok(slowlog_val) = redis::cmd("SLOWLOG").arg("GET").arg(20).query_async::<redis::Value>(conn).await {
@@ -924,6 +1069,36 @@ impl XedisClient {
                             suggestion,
                         });
                     }
+                }
+            }
+        }
+        result
+    }
+
+    fn parse_sentinel_kv_entries(val: &redis::Value) -> Vec<std::collections::HashMap<String, String>> {
+        let mut result = Vec::new();
+        if let redis::Value::Array(items) = val {
+            for item in items {
+                let mut map = std::collections::HashMap::new();
+                match item {
+                    redis::Value::Array(pairs) => {
+                        let mut i = 0;
+                        while i + 1 < pairs.len() {
+                            let k = Self::redis_value_to_string(&pairs[i]);
+                            let v = Self::redis_value_to_string(&pairs[i + 1]);
+                            map.insert(k, v);
+                            i += 2;
+                        }
+                    }
+                    redis::Value::Map(pairs) => {
+                        for (k, v) in pairs {
+                            map.insert(Self::redis_value_to_string(k), Self::redis_value_to_string(v));
+                        }
+                    }
+                    _ => {}
+                }
+                if !map.is_empty() {
+                    result.push(map);
                 }
             }
         }

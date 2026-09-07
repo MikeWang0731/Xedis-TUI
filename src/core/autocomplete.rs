@@ -153,6 +153,7 @@ impl AutocompleteEngine {
         RedisCommandSpec { name: "CLIENT", signature: "CLIENT [LIST|KILL|GETNAME|SETNAME|PAUSE|ID]", description: "客户端连接管理命令族", category: "Server", example: "CLIENT LIST" },
         RedisCommandSpec { name: "CONFIG", signature: "CONFIG [GET|SET|REWRITE|RESETSTAT]", description: "运行时配置动态查询与管理命令族", category: "Server", example: "CONFIG GET maxmemory*" },
         RedisCommandSpec { name: "CLUSTER", signature: "CLUSTER [NODES|INFO|SLOTS|SHARDS|MYID|FAILOVER]", description: "集群拓扑与分片运维命令族", category: "Cluster", example: "CLUSTER NODES" },
+        RedisCommandSpec { name: "SENTINEL", signature: "SENTINEL [MASTERS|MASTER|SLAVES|SENTINELS|CKQUORUM|FAILOVER]", description: "哨兵高可用监控与仲裁故障转移控制命令族", category: "Sentinel", example: "SENTINEL masters" },
     ];
 
     pub const SUBCOMMANDS: &'static [SubcommandSpec] = &[
@@ -198,6 +199,7 @@ impl AutocompleteEngine {
         SubcommandSpec { parent_cmd: "INFO", name: "CPU", signature: "INFO cpu", description: "Redis 主进程与后台子线程消耗的系统态/用户态 CPU 耗时", example: "INFO cpu" },
         SubcommandSpec { parent_cmd: "INFO", name: "COMMANDSTATS", signature: "INFO commandstats", description: "各项 Redis 命令的累计调用频次、总耗时与平均每条耗时", example: "INFO commandstats" },
         SubcommandSpec { parent_cmd: "INFO", name: "CLUSTER", signature: "INFO cluster", description: "集群拓扑健康度、槽位覆盖率与各节点通信状态统计", example: "INFO cluster" },
+        SubcommandSpec { parent_cmd: "INFO", name: "SENTINEL", signature: "INFO sentinel", description: "哨兵监控状态、Master 数量、仲裁倾斜与运行脚本统计", example: "INFO sentinel" },
         SubcommandSpec { parent_cmd: "INFO", name: "KEYSPACE", signature: "INFO keyspace", description: "当前各数据库包含的 Key 数量、已设置过期时间及平均 TTL", example: "INFO keyspace" },
         SubcommandSpec { parent_cmd: "INFO", name: "ALL", signature: "INFO all", description: "获取 Redis 服务器所有维度的全部监控指标与统计", example: "INFO all" },
         SubcommandSpec { parent_cmd: "INFO", name: "DEFAULT", signature: "INFO default", description: "仅获取默认常规的基础监控指标集合", example: "INFO default" },
@@ -224,6 +226,16 @@ impl AutocompleteEngine {
         SubcommandSpec { parent_cmd: "CLUSTER", name: "MEET", signature: "CLUSTER MEET <ip> <port>", description: "将指定 IP 和端口的新节点加入当前集群", example: "CLUSTER MEET 127.0.0.1 22004" },
         SubcommandSpec { parent_cmd: "CLUSTER", name: "COUNTKEYSINSLOT", signature: "CLUSTER COUNTKEYSINSLOT <slot>", description: "查询指定槽位 (0~16383) 中当前包含的 Key 总数", example: "CLUSTER COUNTKEYSINSLOT 5460" },
         SubcommandSpec { parent_cmd: "CLUSTER", name: "KEYSLOT", signature: "CLUSTER KEYSLOT <key>", description: "计算指定 Key 对应的 CRC16 哈希槽位编号", example: "CLUSTER KEYSLOT user:1001" },
+
+        // SENTINEL subcommands
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "MASTERS", signature: "SENTINEL masters", description: "获取所有被监控的主节点及其运行状态与 Quorum 配置", example: "SENTINEL masters" },
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "MASTER", signature: "SENTINEL master <master-name>", description: "获取指定主节点的详细配置与实时运行指标", example: "SENTINEL master mymaster" },
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "SLAVES", signature: "SENTINEL slaves <master-name>", description: "列出指定主节点下挂载的所有从节点与复制状态", example: "SENTINEL slaves mymaster" },
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "SENTINELS", signature: "SENTINEL sentinels <master-name>", description: "列出监控该主节点的所有其他法定哨兵节点信息", example: "SENTINEL sentinels mymaster" },
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "CKQUORUM", signature: "SENTINEL ckquorum <master-name>", description: "检查当前哨兵法定多数仲裁配置是否满足故障转移条件", example: "SENTINEL ckquorum mymaster" },
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "FAILOVER", signature: "SENTINEL failover <master-name>", description: "手动强制触发指定主节点的故障转移升级流程", example: "SENTINEL failover mymaster" },
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "GET-MASTER-ADDR-BY-NAME", signature: "SENTINEL get-master-addr-by-name <master-name>", description: "获取当前指定主节点的主动服务 IP 和端口", example: "SENTINEL get-master-addr-by-name mymaster" },
+        SubcommandSpec { parent_cmd: "SENTINEL", name: "RESET", signature: "SENTINEL reset <pattern>", description: "根据模式匹配重置被监控的主节点状态与配置", example: "SENTINEL reset *" },
 
         // CONFIG subcommands
         SubcommandSpec { parent_cmd: "CONFIG", name: "GET", signature: "CONFIG GET <parameter>", description: "读取 Redis 运行时配置参数值 (支持 glob 通配符)", example: "CONFIG GET maxmemory*" },
