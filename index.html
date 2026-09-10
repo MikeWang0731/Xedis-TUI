@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Xedis-TUI：基于 Rust 的 Redis 终端管理与排障工具，集成交互式命令流、安全守卫、集群拓扑与实时遥测。">
+  <meta name="theme-color" content="#090f14">
+  <title>Xedis-TUI · Redis，尽在终端</title>
+  <script src="./theme.js"></script>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="header wrap">
+    <a class="brand" href="#" aria-label="Xedis-TUI 首页"><span class="brand-mark" aria-hidden="true">&gt;_</span> Xedis<span class="muted">-TUI</span></a>
+    <nav aria-label="主导航"><a href="#features">功能<span class="nav-code"> /01</span></a><a href="#preview">预览<span class="nav-code"> /02</span></a><a href="#start">开始<span class="nav-code"> /03</span></a></nav>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换到浅色主题" aria-pressed="false" hidden><span aria-hidden="true" id="theme-icon">☼</span><span id="theme-label">浅色模式</span></button>
+  </header>
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="status-dot"></span> BUILT FOR YOUR TERMINAL <span class="version">v0.1.0 / ALPHA</span></div>
+        <p class="command-heading"><span>~</span> $ redis, meet your new interface.</p>
+        <h1 id="hero-title">Redis，<br>尽在<span class="accent">终端<span class="cursor" aria-hidden="true">_</span></span></h1>
+        <p class="hero-description">从一条命令，到整个集群。<br>在熟悉的终端里，完成 Redis 管理、观测与排障。</p>
+        <div class="actions"><a class="button primary" href="https://github.com/MikeWang0731/Xedis-TUI/releases">下载 Release <span aria-hidden="true">↗</span></a><a class="button" href="https://github.com/MikeWang0731/Xedis-TUI">GitHub 仓库 <span aria-hidden="true">↗</span></a></div>
+        <p class="platforms">macOS <span>/</span> Linux <span>/</span> Windows <span class="platform-note">单一二进制，解压即用</span></p>
+      </div>
+      <aside class="session" aria-label="Xedis-TUI 功能概览">
+        <div class="window-bar"><span><span class="accent">&gt;_</span> xedis-tui</span><span class="muted">product.manifest</span></div>
+        <div class="session-body"><div class="session-line muted"># Your Redis workspace, in one terminal.</div><div class="session-line"><span class="accent">❯</span> cat capabilities</div>
+          <dl class="manifest"><div><dt>01 / INTERACT</dt><dd>命令流 <span>+ 智能补全</span></dd></div><div><dt>02 / PROTECT</dt><dd>安全守卫 <span>+ 风险提示</span></dd></div><div><dt>03 / OBSERVE</dt><dd>实时遥测 <span>+ 慢日志</span></dd></div><div><dt>04 / CONNECT</dt><dd>集群拓扑 <span>+ 定向路由</span></dd></div></dl>
+          <div class="session-prompt"><span class="accent">❯</span> xedis-tui -H 127.0.0.1 -p 6379<span class="block-cursor" aria-hidden="true"></span></div>
+        </div><div class="window-footer"><span><span class="status-dot"></span> RUST + RATATUI</span><span>KEYBOARD FIRST</span></div>
+      </aside>
+    </section>
+    <div class="compatibility wrap"><span class="muted">面向 Redis 兼容协议</span><div>Redis <span>·</span> Valkey <span>·</span> KeyDB <span>·</span> Dragonfly</div><span class="compat-end">[ terminal-native ]</span></div>
+    <section id="features" class="section wrap" aria-labelledby="features-title">
+      <div class="section-heading"><div><p class="eyebrow">01 / CAPABILITIES</p><h2 id="features-title">命令之外，掌控更多。</h2></div><p>操作、保护、观测。<br>让排障思路保持连贯。</p></div>
+      <div class="feature-grid">
+        <article class="feature"><div class="feature-top"><span class="feature-symbol" aria-hidden="true">[ ! ]</span><span>01</span></div><h3>执行之前，多一道守卫</h3><p>识别 FLUSHALL、FLUSHDB 等高危命令，展示风险等级、原因和替代建议，让每次确认都有依据。</p><div class="feature-code"><span class="amber">! SAFETY GUARD</span><span>先确认，再执行</span></div></article>
+        <article class="feature"><div class="feature-top"><span class="feature-symbol" aria-hidden="true">&gt; /</span><span>02</span></div><h3>少打一些，多做一点</h3><p>上下文补全原生命令、子命令与快捷宏。从分页扫描、大 Key 分析到连接排查，让常用操作触手可及。</p><div class="feature-code"><code>/scan</code><code>/bigkeys</code><code>/clients</code></div></article>
+        <article class="feature"><div class="feature-top"><span class="feature-symbol" aria-hidden="true">[ ↗ ]</span><span>03</span></div><h3>把集群，看清楚</h3><p>查看主从节点、健康状态与槽位分布。通过 @node 定向派发命令，或使用 @all 进行广播执行。</p><div class="feature-code"><code>@node</code><span>→</span><code>@all</code><span>→ cluster</span></div></article>
+        <article class="feature"><div class="feature-top"><span class="feature-symbol" aria-hidden="true">▁▃▆▂▅</span><span>04</span></div><h3>让异常，有迹可循</h3><p>在实时看板中关注内存、QPS、命中率与网络吞吐，结合慢日志的执行耗时和优化提示定位问题。</p><div class="feature-code"><code>F2</code><span>Telemetry</span><code>F4</code><span>Slowlog</span></div></article>
+      </div>
+    </section>
+    <section id="preview" class="section wrap" aria-labelledby="preview-title">
+      <div class="section-heading"><div><p class="eyebrow">02 / WORKSPACE</p><h2 id="preview-title">你的终端，你的工作节奏。</h2></div><p>四种布局，自由切换。<br>深浅主题，适应不同环境。</p></div>
+      <figure class="screenshot-window"><div class="window-bar"><span><span class="accent">&gt;_</span> workspace.preview</span><span class="muted">Xedis-TUI / v0.1.0</span></div>
+        <!-- SCREENSHOT: 用 <img class="product-screenshot" src="./assets/workspace.webp" alt="Xedis-TUI 命令流与遥测看板" width="1600" height="900" loading="lazy"> 替换下面的 screenshot-placeholder。 -->
+        <div class="screenshot-placeholder"><span class="placeholder-cross" aria-hidden="true">+</span><span class="placeholder-label">[ WORKSPACE SCREENSHOT ]</span><p>产品截图即将补充</p><span class="placeholder-caption">命令交互流 / 遥测看板 / 集群拓扑</span></div>
+        <figcaption class="window-footer"><span>Balanced · Focus · Monitor · Zen</span><span><kbd>F5</kbd> 切换布局</span></figcaption>
+      </figure>
+      <div class="workspace-notes"><p><kbd>Tab</kbd> 切换面板焦点</p><p><kbd>F1</kbd> 打开排障手册</p><p><code>/theme</code> 切换产品主题</p></div>
+    </section>
+    <section id="start" class="section wrap start-section" aria-labelledby="start-title">
+      <div><p class="eyebrow">03 / GET STARTED</p><h2 id="start-title">下一条命令，<br>从这里开始。</h2><p class="start-description">从 Releases 下载对应平台的文件，<br>解压后在终端中连接你的 Redis。</p><a class="text-link" href="https://github.com/MikeWang0731/Xedis-TUI/releases">获取 Xedis-TUI <span aria-hidden="true">↗</span></a></div>
+      <div class="quickstart"><div class="window-bar"><span>quickstart.sh</span><span class="muted">LOCAL / CLUSTER</span></div><div class="quickstart-body"><p class="muted"># 连接本地 Redis</p><div class="copy-row"><code id="connect-command">./xedis-tui -H 127.0.0.1 -p 6379</code><button id="copy-command" type="button" hidden aria-label="复制连接本地 Redis 的命令">复制</button></div><p class="muted"># 连接 Redis Cluster</p><code>./xedis-tui -H 127.0.0.1 -p 7000 -c</code><p class="command-note">Windows 请将 <code>./xedis-tui</code> 替换为 <code>.\xedis-tui.exe</code>。</p><p id="copy-status" class="copy-status" role="status" aria-live="polite"></p></div></div>
+    </section>
+  </main>
+  <footer class="footer wrap"><a class="brand" href="#"><span class="accent" aria-hidden="true">&gt;_</span> Xedis-TUI</a><span>Built with Rust. Made for the terminal.</span><a href="https://github.com/MikeWang0731/Xedis-TUI">GitHub <span aria-hidden="true">↗</span></a></footer>
+</body>
+</html>
