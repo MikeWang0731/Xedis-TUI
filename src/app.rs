@@ -151,7 +151,12 @@ impl App {
     }
 
     pub fn scroll_cluster_down(&mut self, delta: usize) {
-        let max_s = self.client.telemetry.topology.shards.len().saturating_sub(1);
+        let max_s = match self.client.telemetry.topology.mode {
+            crate::backend::cluster_info::RedisTopologyMode::Sentinel => {
+                self.client.telemetry.topology.sentinel.as_ref().map_or(0, |s| s.masters.len().saturating_sub(1))
+            }
+            _ => self.client.telemetry.topology.shards.len().saturating_sub(1),
+        };
         self.cluster_scroll_offset = (self.cluster_scroll_offset + delta).min(max_s);
     }
 

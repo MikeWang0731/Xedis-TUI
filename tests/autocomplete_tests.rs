@@ -16,6 +16,7 @@ fn mock_nodes() -> Vec<ClusterNodeInfo> {
             key_count: 1000,
             is_healthy: true,
             ping_ms: 0.38,
+            ..Default::default()
         },
         ClusterNodeInfo {
             id: "node-2".to_string(),
@@ -30,6 +31,7 @@ fn mock_nodes() -> Vec<ClusterNodeInfo> {
             key_count: 1000,
             is_healthy: true,
             ping_ms: 0.41,
+            ..Default::default()
         },
     ]
 }

@@ -128,6 +128,9 @@ pub struct ThemePalette {
     pub sentinel_border: Color,
     pub sentinel_peer_title: Color,
     pub sentinel_myself_title: Color,
+    pub scrollbar_thumb: Color,
+    pub scrollbar_track: Color,
+    pub scrollbar_arrow: Color,
 
     // Slowlog View
     pub slowlog_border: Color,
@@ -292,6 +295,9 @@ impl ThemePalette {
             sentinel_border: Color::Rgb(217, 119, 6),
             sentinel_peer_title: Color::Rgb(251, 191, 36),
             sentinel_myself_title: Color::Rgb(180, 130, 45),
+            scrollbar_thumb: Color::Rgb(70, 95, 120),
+            scrollbar_track: Color::Rgb(35, 45, 55),
+            scrollbar_arrow: Color::Rgb(90, 115, 140),
 
             // Slowlog View
             slowlog_border: Color::Yellow,
@@ -456,6 +462,9 @@ impl ThemePalette {
             sentinel_border: Color::Rgb(217, 119, 6),
             sentinel_peer_title: Color::Rgb(146, 64, 14),
             sentinel_myself_title: Color::Rgb(190, 120, 60),
+            scrollbar_thumb: Color::Rgb(140, 165, 190),
+            scrollbar_track: Color::Rgb(220, 230, 240),
+            scrollbar_arrow: Color::Rgb(100, 125, 150),
 
             // Slowlog View
             slowlog_border: Color::Rgb(202, 138, 4),

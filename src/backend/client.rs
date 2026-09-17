@@ -1,4 +1,7 @@
-use crate::backend::cluster_info::{ClusterNode, ClusterTopology, ClusterTopologyParser, RedisTopologyMode, SentinelPeerInfo, SentinelTopology};
+use crate::backend::cluster_info::{
+    ClusterHealthStatus, ClusterNode, ClusterTopology, ClusterTopologyParser, NodeHealthState,
+    RedisTopologyMode, SentinelPeerInfo, SentinelTopology,
+};
 use crate::backend::formatter::FormattedValue;
 use crate::core::macro_engine::MacroEngine;
 use crate::core::telemetry::{MetricsHistory, TelemetryMetrics, TelemetryParser};
@@ -170,6 +173,9 @@ impl XedisClient {
                                 covered_slots: 0,
                                 is_fully_covered: false,
                                 is_cluster: true,
+                                cluster_state_ok: true,
+                                health_status: ClusterHealthStatus::Healthy,
+                                health_summary: String::new(),
                                 replication: None,
                                 sentinel: None,
                             },
@@ -206,6 +212,9 @@ impl XedisClient {
                             covered_slots: 0,
                             is_fully_covered: false,
                             is_cluster: false,
+                            cluster_state_ok: true,
+                            health_status: ClusterHealthStatus::Healthy,
+                            health_summary: String::new(),
                             replication: None,
                             sentinel: if is_sentinel { Some(SentinelTopology::default()) } else { None },
                         },
@@ -565,11 +574,14 @@ impl XedisClient {
                     role: "Master".to_string(),
                     master_id: None,
                     is_healthy: true,
+                    health_state: NodeHealthState::Healthy,
                     ping_ms: 0.38,
                     slots_raw: "0-5460".to_string(),
                     slot_ranges: vec![(0, 5460)],
                     slot_count: 5461,
                     key_count: 402_830,
+                    migrations: Vec::new(),
+                    repl_offset: Some(145_210),
                 };
                 let res = Self::generate_mock_response_for_node(&default_node, cmd, args);
                 (res, start.elapsed())
@@ -881,11 +893,18 @@ impl XedisClient {
                                 role: "Sentinel".to_string(),
                                 master_id: None,
                                 is_healthy: self.telemetry.connected,
+                                health_state: if self.telemetry.connected {
+                                    NodeHealthState::Healthy
+                                } else {
+                                    NodeHealthState::Fail
+                                },
                                 ping_ms,
                                 slots_raw: String::new(),
                                 slot_ranges: Vec::new(),
                                 slot_count: 0,
                                 key_count: 0,
+                                migrations: Vec::new(),
+                                repl_offset: None,
                             });
                         }
 
@@ -949,10 +968,20 @@ impl XedisClient {
                 }
 
                 if let Ok(nodes_str) = redis::cmd("CLUSTER").arg("NODES").query_async::<String>(conn).await {
-                    self.telemetry.topology = ClusterTopologyParser::parse_cluster_nodes(
+                    let mut cluster_state_ok = None;
+                    if let Ok(info_str) = redis::cmd("CLUSTER").arg("INFO").query_async::<String>(conn).await {
+                        let (ok, _) = ClusterTopologyParser::parse_cluster_info(&info_str);
+                        cluster_state_ok = Some(ok);
+                    }
+                    let mut topo = ClusterTopologyParser::parse_cluster_nodes_with_info(
                         &nodes_str,
                         self.telemetry.metrics.ping_latency_ms,
+                        cluster_state_ok,
                     );
+                    if let Some(repl) = &self.telemetry.topology.replication {
+                        topo.apply_replication_info(repl);
+                    }
+                    self.telemetry.topology = topo;
                 }
                 if let Ok(slowlog_val) = redis::cmd("SLOWLOG").arg("GET").arg(20).query_async::<redis::Value>(conn).await {
                     let parsed = Self::parse_slowlog_redis_value(&slowlog_val, "cluster");

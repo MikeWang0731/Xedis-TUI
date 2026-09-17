@@ -1,10 +1,15 @@
-use crate::backend::cluster_info::{ClusterNode, ClusterTopology, RedisTopologyMode};
+use crate::backend::cluster_info::{
+    ClusterHealthStatus, ClusterNode, ClusterTopology, NodeHealthState, RedisTopologyMode,
+    SlotMigration, SlotMigrationType,
+};
 use crate::ui::theme::ThemePalette;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem},
+    widgets::{
+        Block, BorderType, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
     Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -32,25 +37,41 @@ impl ClusterView {
         let inner = block.inner(area);
         f.render_widget(block, area);
 
+        let max_scroll = match topology.mode {
+            RedisTopologyMode::Sentinel => {
+                topology.sentinel.as_ref().map_or(0, |s| s.masters.len().saturating_sub(1))
+            }
+            _ => topology.shards.len().saturating_sub(1),
+        };
+
         let mut items = Vec::new();
         let avail_width = inner.width as usize;
+        let content_width = if max_scroll > 0 {
+            avail_width.saturating_sub(1)
+        } else {
+            avail_width
+        };
 
         match topology.mode {
             RedisTopologyMode::Sentinel => {
-                Self::build_sentinel_topology_items(&mut items, topology, avail_width, theme);
+                Self::build_sentinel_topology_items(&mut items, topology, content_width, theme);
             }
             RedisTopologyMode::Cluster => {
-                Self::build_cluster_topology_items(&mut items, topology, avail_width, theme);
+                Self::build_cluster_topology_items(&mut items, topology, content_width, theme);
             }
             RedisTopologyMode::Standalone if topology.is_cluster => {
-                Self::build_cluster_topology_items(&mut items, topology, avail_width, theme);
+                Self::build_cluster_topology_items(&mut items, topology, content_width, theme);
             }
             RedisTopologyMode::Standalone => {
-                Self::build_standalone_topology_items(&mut items, topology, avail_width, theme);
+                Self::build_standalone_topology_items(&mut items, topology, content_width, theme);
             }
         }
 
         let total_items = items.len();
+        let total_lines: usize = items.iter().map(|item| item.height()).sum();
+        let is_overflowing = total_lines > inner.height as usize;
+        let has_paging = max_scroll > 0 && (is_overflowing || scroll_offset > 0);
+
         let visible_items = if scroll_offset < total_items {
             items.into_iter().skip(scroll_offset).collect()
         } else {
@@ -59,51 +80,30 @@ impl ClusterView {
 
         let list = List::new(visible_items);
         f.render_widget(list, inner);
+
+        if has_paging && inner.width >= 2 && inner.height >= 3 {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"))
+                .track_symbol(Some("│"))
+                .thumb_symbol("█")
+                .begin_style(Style::default().fg(theme.scrollbar_arrow))
+                .end_style(Style::default().fg(theme.scrollbar_arrow))
+                .track_style(Style::default().fg(theme.scrollbar_track))
+                .thumb_style(Style::default().fg(theme.scrollbar_thumb));
+
+            let mut scrollbar_state = ScrollbarState::new(max_scroll + 1)
+                .position(scroll_offset.min(max_scroll))
+                .viewport_content_length(1);
+
+            f.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+        }
     }
 
     fn build_cluster_topology_items(items: &mut Vec<ListItem<'static>>, topology: &ClusterTopology, width: usize, theme: &ThemePalette) {
-        // 1. Adaptive Summary Header
-        let (cov_text, cov_color) = if topology.is_fully_covered {
-            (format!("{}/16384 (100%) [OK]", topology.covered_slots), theme.status_healthy)
-        } else {
-            (format!("{}/16384 [WARN]", topology.covered_slots), theme.status_warning)
-        };
-
-        if width >= 78 {
-            // Wide layout (Single line)
-            let summary_line = Line::from(vec![
-                Span::styled(" [Topology: ", Style::default().fg(theme.telemetry_label)),
-                Span::styled(format!("Nodes: {} ", topology.total_nodes), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("· Healthy: {} ", topology.healthy_nodes), Style::default().fg(theme.status_healthy)),
-                Span::styled(format!("· Shards: {} ", topology.shards.len()), Style::default().fg(theme.border_focused)),
-                Span::styled(format!("· Coverage: {}]", cov_text), Style::default().fg(cov_color).add_modifier(Modifier::BOLD)),
-            ]);
-            items.push(ListItem::new(vec![summary_line, Line::from("")]));
-        } else if width >= 48 {
-            // Medium layout (2 lines)
-            let line1 = Line::from(vec![
-                Span::styled(" [Nodes: ", Style::default().fg(theme.telemetry_label)),
-                Span::styled(format!("{}/{} Healthy", topology.healthy_nodes, topology.total_nodes), Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" · Shards: {}]", topology.shards.len()), Style::default().fg(theme.border_focused)),
-            ]);
-            let line2 = Line::from(vec![
-                Span::styled(" [Coverage: ", Style::default().fg(theme.telemetry_label)),
-                Span::styled(cov_text, Style::default().fg(cov_color).add_modifier(Modifier::BOLD)),
-                Span::styled("]", Style::default().fg(theme.telemetry_label)),
-            ]);
-            items.push(ListItem::new(vec![line1, line2, Line::from("")]));
-        } else {
-            // Compact layout (2 short lines)
-            let line1 = Line::from(vec![
-                Span::styled(" [Nodes: ", Style::default().fg(theme.telemetry_label)),
-                Span::styled(format!("{}/{}", topology.healthy_nodes, topology.total_nodes), Style::default().fg(theme.status_healthy).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" · Shards: {}]", topology.shards.len()), Style::default().fg(theme.border_focused)),
-            ]);
-            let line2 = Line::from(vec![
-                Span::styled(format!(" [Cov: {}]", if topology.is_fully_covered { "100% OK" } else { "WARN" }), Style::default().fg(cov_color).add_modifier(Modifier::BOLD)),
-            ]);
-            items.push(ListItem::new(vec![line1, line2, Line::from("")]));
-        }
+        // 1. Adaptive Summary Header with 3-tier health status (guaranteed never to truncate or overflow)
+        let summary_lines = Self::format_cluster_summary_header(topology, width, theme);
+        items.push(ListItem::new(summary_lines));
 
         // Card box width (leave 1 char margin on left/right)
         let box_w = width.saturating_sub(1).max(28);
@@ -189,6 +189,21 @@ impl ClusterView {
                 }
             }
 
+            // Master Slot Migrations (if any)
+            for mig in &shard.master.migrations {
+                let mig_rows = Self::format_migration_spans(mig, master_content_w, theme);
+                for row_spans in mig_rows {
+                    Self::push_boxed_line(&mut lines, " │  ", row_spans, master_content_w, outer_right_spaces, theme);
+                }
+            }
+
+            // Master Replication Offset (if any)
+            if let Some(master_rows) = Self::format_master_repl_spans(shard.master.repl_offset, master_content_w, theme) {
+                for row_spans in master_rows {
+                    Self::push_boxed_line(&mut lines, " │  ", row_spans, master_content_w, outer_right_spaces, theme);
+                }
+            }
+
             // Master Bottom Border: ╰──────────────────────────────────╯
             let m_bot_dashes = master_box_w.saturating_sub(2);
             lines.push(Line::from(vec![
@@ -268,6 +283,26 @@ impl ClusterView {
                         Self::push_boxed_line(&mut lines, &replica_prefix, row_spans, replica_content_w, outer_right_spaces, theme);
                     }
 
+                    // Replica Slot Migrations (if any)
+                    for mig in &replica.migrations {
+                        let mig_rows = Self::format_migration_spans(mig, replica_content_w, theme);
+                        for row_spans in mig_rows {
+                            Self::push_boxed_line(&mut lines, &replica_prefix, row_spans, replica_content_w, outer_right_spaces, theme);
+                        }
+                    }
+
+                    // Replica Replication Offset & Lag (if any)
+                    if let Some(repl_rows) = Self::format_replica_repl_spans(
+                        shard.master.repl_offset,
+                        replica.repl_offset,
+                        replica_content_w,
+                        theme,
+                    ) {
+                        for row_spans in repl_rows {
+                            Self::push_boxed_line(&mut lines, &replica_prefix, row_spans, replica_content_w, outer_right_spaces, theme);
+                        }
+                    }
+
                     // Replica Bottom Border
                     let r_bot_dashes = replica_box_w.saturating_sub(2);
                     lines.push(Line::from(vec![
@@ -293,6 +328,152 @@ impl ClusterView {
             lines.push(Line::from(""));
             items.push(ListItem::new(lines));
         }
+    }
+
+    fn format_cluster_summary_header(
+        topology: &ClusterTopology,
+        width: usize,
+        theme: &ThemePalette,
+    ) -> Vec<Line<'static>> {
+        let (status_badge, status_color) = match topology.health_status {
+            ClusterHealthStatus::Healthy => ("[Cluster: HEALTHY]", theme.status_healthy),
+            ClusterHealthStatus::Degraded => ("[Cluster: DEGRADED]", theme.status_warning),
+            ClusterHealthStatus::Failed => ("[Cluster: FAILED]", theme.status_critical),
+        };
+
+        let cov_text = if topology.is_fully_covered {
+            format!("{}/16384 (100%)", topology.covered_slots)
+        } else {
+            format!("{}/16384 [WARN]", topology.covered_slots)
+        };
+        let cov_color = if topology.is_fully_covered {
+            theme.status_healthy
+        } else {
+            theme.status_critical
+        };
+
+        let total_migrations: usize = topology
+            .shards
+            .iter()
+            .map(|s| s.master.migrations.len() + s.replicas.iter().map(|r| r.migrations.len()).sum::<usize>())
+            .sum();
+
+        // Construct clean, non-redundant alert / reason text
+        let alert_text = if topology.health_status == ClusterHealthStatus::Healthy {
+            "Replication: In Sync · All nodes healthy".to_string()
+        } else {
+            let mut parts = Vec::new();
+            if total_migrations > 0 {
+                parts.push(format!("Active Migration: {} slot{}", total_migrations, if total_migrations > 1 { "s" } else { "" }));
+            }
+            if !topology.health_summary.is_empty() {
+                let cleaned_summary = if total_migrations > 0 {
+                    topology.health_summary
+                        .split(" · ")
+                        .filter(|part| !part.contains("migrat"))
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                } else {
+                    topology.health_summary.clone()
+                };
+                if !cleaned_summary.is_empty() {
+                    parts.push(cleaned_summary);
+                }
+            }
+            if parts.is_empty() {
+                topology.health_status.badge_label().to_string()
+            } else {
+                parts.join(" · ")
+            }
+        };
+
+        // Tier 1: Single Line (Ultra-wide terminal, only when entire line fits within width)
+        let single_alert_suffix = if topology.health_status == ClusterHealthStatus::Healthy {
+            "· Repl: In Sync".to_string()
+        } else {
+            format!("· {}", alert_text)
+        };
+
+        let single_line_spans = vec![
+            Span::styled(format!(" {} ", status_badge), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("Nodes: {}/{} ", topology.healthy_nodes, topology.total_nodes), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("· Shards: {} ", topology.shards.len()), Style::default().fg(theme.border_focused)),
+            Span::styled(format!("· Slots: {} ", cov_text), Style::default().fg(cov_color).add_modifier(Modifier::BOLD)),
+            Span::styled(single_alert_suffix, Style::default().fg(if topology.health_status == ClusterHealthStatus::Healthy { theme.status_healthy } else { status_color }).add_modifier(Modifier::BOLD)),
+        ];
+
+        if Self::spans_width(&single_line_spans) <= width {
+            return vec![Line::from(single_line_spans), Line::from("")];
+        }
+
+        // Tier 2: 2-Line Layout (Standard terminal width ~70-110 cols)
+        let l1_spans = vec![
+            Span::styled(format!(" {} ", status_badge), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("Nodes: {}/{} ", topology.healthy_nodes, topology.total_nodes), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("· Shards: {} ", topology.shards.len()), Style::default().fg(theme.border_focused)),
+            Span::styled(format!("· Slots: {}", cov_text), Style::default().fg(cov_color).add_modifier(Modifier::BOLD)),
+        ];
+
+        if Self::spans_width(&l1_spans) <= width {
+            let (prefix, color) = if topology.health_status == ClusterHealthStatus::Healthy {
+                ("  ↳ Status: ", theme.status_healthy)
+            } else {
+                ("  ↳ Alerts: ", status_color)
+            };
+            let max_alert_w = width.saturating_sub(prefix.len() + 1);
+            let fit_alert = Self::fit_str_to_width(&alert_text, max_alert_w);
+            let l2_spans = vec![
+                Span::styled(prefix, Style::default().fg(color)),
+                Span::styled(fit_alert, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            ];
+            return vec![Line::from(l1_spans), Line::from(l2_spans), Line::from("")];
+        }
+
+        // Tier 3: Medium layout (48 ~ 70 cols)
+        if width >= 48 {
+            let line1 = Line::from(vec![
+                Span::styled(format!(" {} ", status_badge), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("Nodes: {}/{} ", topology.healthy_nodes, topology.total_nodes), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("· Shards: {}", topology.shards.len()), Style::default().fg(theme.border_focused)),
+            ]);
+            let line2 = Line::from(vec![
+                Span::styled("  Slots: ", Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
+                Span::styled(cov_text, Style::default().fg(cov_color).add_modifier(Modifier::BOLD)),
+            ]);
+            let prefix = "  ↳ ";
+            let max_alert_w = width.saturating_sub(prefix.len() + 1);
+            let fit_alert = Self::fit_str_to_width(&alert_text, max_alert_w);
+            let line3 = Line::from(vec![
+                Span::styled(prefix, Style::default().fg(status_color)),
+                Span::styled(fit_alert, Style::default().fg(if topology.health_status == ClusterHealthStatus::Healthy { theme.status_healthy } else { status_color }).add_modifier(Modifier::BOLD)),
+            ]);
+            return vec![line1, line2, line3, Line::from("")];
+        }
+
+        // Tier 4: Compact layout (< 48 cols)
+        let l1_badge = format!("[{}]", topology.health_status.short_label());
+        let l1_nodes = format!("{}/{} Nodes", topology.healthy_nodes, topology.total_nodes);
+        let l1_str = format!("{} {}", l1_badge, l1_nodes);
+        let fit_l1 = Self::fit_str_to_width(&l1_str, width.saturating_sub(2));
+        let line1 = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(fit_l1, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        ]);
+
+        let l2_str = format!("{} Shards · Slots: {}", topology.shards.len(), if topology.is_fully_covered { "100% OK" } else { "CRITICAL" });
+        let fit_l2 = Self::fit_str_to_width(&l2_str, width.saturating_sub(3));
+        let line2 = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(fit_l2, Style::default().fg(cov_color).add_modifier(Modifier::BOLD)),
+        ]);
+
+        let max_alert_w = width.saturating_sub(3);
+        let fit_alert = Self::fit_str_to_width(&alert_text, max_alert_w);
+        let line3 = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(fit_alert, Style::default().fg(status_color)),
+        ]);
+        vec![line1, line2, line3, Line::from("")]
     }
 
     fn fit_str_to_width(s: &str, max_w: usize) -> String {
@@ -356,15 +537,23 @@ impl ClusterView {
         content_w: usize,
         theme: &ThemePalette,
     ) -> Vec<Vec<Span<'static>>> {
-        let (status_str, status_color) = if node.is_healthy {
-            ("[HEALTHY]", theme.status_healthy)
-        } else {
-            ("[FAIL]", theme.status_critical)
+        let (status_str, status_color) = match node.health_state {
+            NodeHealthState::Healthy => ("[HEALTHY]", theme.status_healthy),
+            NodeHealthState::Pfail => ("[PFAIL]", theme.status_warning),
+            NodeHealthState::Fail => ("[FAIL]", theme.status_critical),
         };
 
         let id_str = format!("@{}", node.id);
-        let ping_str = format!("Ping: {:.1}ms", node.ping_ms);
-        let short_ping = format!("{:.1}ms", node.ping_ms);
+        let ping_str = if node.health_state == NodeHealthState::Healthy {
+            format!("Ping: {:.1}ms", node.ping_ms)
+        } else {
+            "Ping: --".to_string()
+        };
+        let short_ping = if node.health_state == NodeHealthState::Healthy {
+            format!("{:.1}ms", node.ping_ms)
+        } else {
+            "--".to_string()
+        };
 
         // Single line width: "@id address [HEALTHY] Ping: 3.0ms"
         let single_line_w = id_str.width() + 1 + node.address.width() + 1 + status_str.len() + 1 + ping_str.len();
@@ -401,7 +590,7 @@ impl ClusterView {
                 vec![row1, row2]
             } else {
                 // Tier 3: Compact layout (3 rows)
-                let status_label = if content_w < 18 && status_str == "[HEALTHY]" {
+                let status_label = if content_w < 18 && node.health_state == NodeHealthState::Healthy {
                     "[OK]"
                 } else {
                     status_str
@@ -420,6 +609,133 @@ impl ClusterView {
                 ];
                 vec![row1, row2, row3]
             }
+        }
+    }
+
+    fn format_number_with_commas(n: u64) -> String {
+        let s = n.to_string();
+        let mut result = String::new();
+        let len = s.len();
+        for (i, c) in s.chars().enumerate() {
+            if i > 0 && (len - i) % 3 == 0 {
+                result.push(',');
+            }
+            result.push(c);
+        }
+        result
+    }
+
+    fn format_bytes(bytes: u64) -> String {
+        if bytes < 1024 {
+            format!("{} B", bytes)
+        } else if bytes < 1024 * 1024 {
+            format!("{:.1} KB", bytes as f64 / 1024.0)
+        } else if bytes < 1024 * 1024 * 1024 {
+            format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+        } else {
+            format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        }
+    }
+
+    fn format_migration_spans(
+        migration: &SlotMigration,
+        max_w: usize,
+        theme: &ThemePalette,
+    ) -> Vec<Vec<Span<'static>>> {
+        let (icon, prefix, color) = match migration.migration_type {
+            SlotMigrationType::Migrating => ("⇄ ", "MIGRATING ", theme.status_warning),
+            SlotMigrationType::Importing => ("⇆ ", "IMPORTING ", theme.shard_master_title),
+        };
+        let arrow = match migration.migration_type {
+            SlotMigrationType::Migrating => "->",
+            SlotMigrationType::Importing => "<-",
+        };
+        let full_text = format!("Slot {} {} {}", migration.slot, arrow, migration.remote_node_repr);
+        let single_line_w = icon.width() + prefix.len() + full_text.width();
+
+        if single_line_w <= max_w {
+            vec![vec![
+                Span::styled(icon, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(full_text, Style::default().fg(theme.text_primary)),
+            ]]
+        } else {
+            let line1 = vec![
+                Span::styled(icon, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("Slot {}", migration.slot), Style::default().fg(theme.text_primary)),
+            ];
+            let arrow_target = format!("   {} {}", arrow, migration.remote_node_repr);
+            let fit_target = Self::fit_str_to_width(&arrow_target, max_w);
+            let line2 = vec![
+                Span::styled(fit_target, Style::default().fg(theme.text_secondary)),
+            ];
+            vec![line1, line2]
+        }
+    }
+
+    fn format_master_repl_spans(
+        master_offset: Option<u64>,
+        max_w: usize,
+        theme: &ThemePalette,
+    ) -> Option<Vec<Vec<Span<'static>>>> {
+        let m_offset = master_offset?;
+        let offset_str = format!("{} (Master)", Self::format_number_with_commas(m_offset));
+        let full_text = format!("Repl Offset: {}", offset_str);
+        if full_text.width() <= max_w {
+            Some(vec![vec![
+                Span::styled("Repl Offset: ", Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
+                Span::styled(offset_str, Style::default().fg(theme.text_secondary)),
+            ]])
+        } else {
+            Some(vec![vec![
+                Span::styled("Repl: ", Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
+                Span::styled(Self::fit_str_to_width(&offset_str, max_w.saturating_sub(6)), Style::default().fg(theme.text_secondary)),
+            ]])
+        }
+    }
+
+    fn format_replica_repl_spans(
+        master_offset: Option<u64>,
+        replica_offset: Option<u64>,
+        max_w: usize,
+        theme: &ThemePalette,
+    ) -> Option<Vec<Vec<Span<'static>>>> {
+        let rep_offset = replica_offset?;
+        let offset_str = format!("Repl Offset: {}", Self::format_number_with_commas(rep_offset));
+
+        if let Some(m_offset) = master_offset {
+            let lag_bytes = m_offset.saturating_sub(rep_offset);
+            let (lag_str, lag_color) = if lag_bytes == 0 {
+                ("Lag: 0 B (In Sync)".to_string(), theme.status_healthy)
+            } else {
+                (format!("Lag: {} (behind)", Self::format_bytes(lag_bytes)), theme.status_warning)
+            };
+
+            let single_line_w = offset_str.width() + 3 + lag_str.width();
+            if single_line_w <= max_w {
+                Some(vec![vec![
+                    Span::styled("Repl Offset: ", Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
+                    Span::styled(Self::format_number_with_commas(rep_offset), Style::default().fg(theme.text_secondary)),
+                    Span::raw(" · "),
+                    Span::styled(lag_str, Style::default().fg(lag_color).add_modifier(Modifier::BOLD)),
+                ]])
+            } else {
+                Some(vec![
+                    vec![
+                        Span::styled("Repl Offset: ", Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
+                        Span::styled(Self::format_number_with_commas(rep_offset), Style::default().fg(theme.text_secondary)),
+                    ],
+                    vec![
+                        Span::styled(Self::fit_str_to_width(&format!("   {}", lag_str), max_w), Style::default().fg(lag_color).add_modifier(Modifier::BOLD)),
+                    ],
+                ])
+            }
+        } else {
+            Some(vec![vec![
+                Span::styled("Repl Offset: ", Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
+                Span::styled(Self::format_number_with_commas(rep_offset), Style::default().fg(theme.text_secondary)),
+            ]])
         }
     }
 
@@ -453,13 +769,14 @@ impl ClusterView {
             Span::styled("Role: Replica / Slave", Style::default().fg(theme.shard_replica_title).add_modifier(Modifier::BOLD))
         };
 
-        if width >= 65 {
-            let summary_line = Line::from(vec![
-                Span::styled(" [Standalone Instance: ", Style::default().fg(theme.text_muted)),
-                role_badge,
-                Span::styled(format!(" · Connected Slaves: {}]", repl_info.connected_slaves), Style::default().fg(theme.border_focused)),
-            ]);
-            items.push(ListItem::new(vec![summary_line, Line::from("")]));
+        let summary_spans = vec![
+            Span::styled(" [Standalone Instance: ", Style::default().fg(theme.text_muted)),
+            role_badge.clone(),
+            Span::styled(format!(" · Connected Slaves: {}]", repl_info.connected_slaves), Style::default().fg(theme.border_focused)),
+        ];
+
+        if Self::spans_width(&summary_spans) <= width {
+            items.push(ListItem::new(vec![Line::from(summary_spans), Line::from("")]));
         } else {
             let line1 = Line::from(vec![
                 Span::styled(" [Standalone: ", Style::default().fg(theme.text_muted)),
@@ -618,19 +935,18 @@ impl ClusterView {
         };
 
         // 1. Adaptive Summary Header
-        if width >= 75 {
-            let summary_line = Line::from(vec![
-                Span::styled(" [Sentinel Topology: ", Style::default().fg(theme.telemetry_label)),
-                Span::styled(format!("Masters: {} ", total_masters), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("· Sentinels: {} ", total_sentinels), Style::default().fg(theme.border_focused)),
-                Span::styled(format!("· {}]", q_status_text), Style::default().fg(q_status_color).add_modifier(Modifier::BOLD)),
-                if sentinel.tilt_mode {
-                    Span::styled(" · [TILT ACTIVE]", Style::default().fg(theme.status_critical).add_modifier(Modifier::BOLD))
-                } else {
-                    Span::raw("")
-                },
-            ]);
-            items.push(ListItem::new(vec![summary_line, Line::from("")]));
+        let mut summary_spans = vec![
+            Span::styled(" [Sentinel Topology: ", Style::default().fg(theme.telemetry_label)),
+            Span::styled(format!("Masters: {} ", total_masters), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("· Sentinels: {} ", total_sentinels), Style::default().fg(theme.border_focused)),
+            Span::styled(format!("· {}]", q_status_text), Style::default().fg(q_status_color).add_modifier(Modifier::BOLD)),
+        ];
+        if sentinel.tilt_mode {
+            summary_spans.push(Span::styled(" · [TILT ACTIVE]", Style::default().fg(theme.status_critical).add_modifier(Modifier::BOLD)));
+        }
+
+        if Self::spans_width(&summary_spans) <= width {
+            items.push(ListItem::new(vec![Line::from(summary_spans), Line::from("")]));
         } else if width >= 48 {
             let line1 = Line::from(vec![
                 Span::styled(" [Sentinel: ", Style::default().fg(theme.telemetry_label)),

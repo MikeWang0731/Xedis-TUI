@@ -1,3 +1,71 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NodeHealthState {
+    #[default]
+    Healthy,
+    Pfail,
+    Fail,
+}
+
+#[allow(dead_code)]
+impl NodeHealthState {
+    pub fn badge_label(&self) -> &'static str {
+        match self {
+            NodeHealthState::Healthy => "[HEALTHY]",
+            NodeHealthState::Pfail => "[PFAIL]",
+            NodeHealthState::Fail => "[FAIL]",
+        }
+    }
+
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            NodeHealthState::Healthy => "[OK]",
+            NodeHealthState::Pfail => "[PFAIL]",
+            NodeHealthState::Fail => "[FAIL]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClusterHealthStatus {
+    #[default]
+    Healthy,
+    Degraded,
+    Failed,
+}
+
+#[allow(dead_code)]
+impl ClusterHealthStatus {
+    pub fn badge_label(&self) -> &'static str {
+        match self {
+            ClusterHealthStatus::Healthy => "[Cluster: HEALTHY]",
+            ClusterHealthStatus::Degraded => "[Cluster: DEGRADED]",
+            ClusterHealthStatus::Failed => "[Cluster: FAILED]",
+        }
+    }
+
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            ClusterHealthStatus::Healthy => "[HEALTHY]",
+            ClusterHealthStatus::Degraded => "[DEGRADED]",
+            ClusterHealthStatus::Failed => "[FAILED]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotMigrationType {
+    Migrating, // [slot->-node_id]
+    Importing, // [slot-<-node_id]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotMigration {
+    pub slot: u16,
+    pub migration_type: SlotMigrationType,
+    pub remote_node_id: String,
+    pub remote_node_repr: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClusterNode {
     pub id: String,
@@ -7,11 +75,36 @@ pub struct ClusterNode {
     pub role: String, // "Master" or "Replica"
     pub master_id: Option<String>,
     pub is_healthy: bool,
+    pub health_state: NodeHealthState,
     pub ping_ms: f64,
     pub slots_raw: String,
     pub slot_ranges: Vec<(u16, u16)>,
     pub slot_count: u16,
     pub key_count: u64,
+    pub migrations: Vec<SlotMigration>,
+    pub repl_offset: Option<u64>,
+}
+
+impl Default for ClusterNode {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            raw_id: String::new(),
+            address: String::new(),
+            cport: 0,
+            role: "Master".to_string(),
+            master_id: None,
+            is_healthy: true,
+            health_state: NodeHealthState::Healthy,
+            ping_ms: 0.0,
+            slots_raw: String::new(),
+            slot_ranges: Vec::new(),
+            slot_count: 0,
+            key_count: 0,
+            migrations: Vec::new(),
+            repl_offset: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,6 +229,9 @@ pub struct ClusterTopology {
     pub covered_slots: u16,
     pub is_fully_covered: bool,
     pub is_cluster: bool,
+    pub cluster_state_ok: bool,
+    pub health_status: ClusterHealthStatus,
+    pub health_summary: String,
     pub replication: Option<ReplicationInfo>,
     pub sentinel: Option<SentinelTopology>,
 }
@@ -147,6 +243,46 @@ impl Default for ClusterTopology {
 }
 
 impl ClusterTopology {
+    #[allow(dead_code)]
+    pub fn empty() -> Self {
+        Self {
+            mode: RedisTopologyMode::Standalone,
+            shards: Vec::new(),
+            standalone_nodes: Vec::new(),
+            total_nodes: 0,
+            healthy_nodes: 0,
+            covered_slots: 0,
+            is_fully_covered: false,
+            is_cluster: false,
+            cluster_state_ok: true,
+            health_status: ClusterHealthStatus::Healthy,
+            health_summary: String::new(),
+            replication: None,
+            sentinel: None,
+        }
+    }
+
+    pub fn apply_replication_info(&mut self, repl: &ReplicationInfo) {
+        if self.shards.is_empty() {
+            return;
+        }
+        for shard in &mut self.shards {
+            if shard.master.repl_offset.is_none() && repl.role == "master" {
+                shard.master.repl_offset = Some(repl.master_repl_offset);
+            }
+            for rep in &mut shard.replicas {
+                if rep.repl_offset.is_none() {
+                    for slave in &repl.slaves {
+                        if rep.cport == slave.port || rep.address.ends_with(&format!(":{}", slave.port)) {
+                            rep.repl_offset = Some(slave.offset);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn mock_cluster_topology() -> Self {
         let master1 = ClusterNode {
             id: "node-1".to_string(),
@@ -156,11 +292,19 @@ impl ClusterTopology {
             role: "Master".to_string(),
             master_id: None,
             is_healthy: true,
+            health_state: NodeHealthState::Healthy,
             ping_ms: 0.38,
             slots_raw: "0-5460".to_string(),
             slot_ranges: vec![(0, 5460)],
             slot_count: 5461,
             key_count: 402_830,
+            migrations: vec![SlotMigration {
+                slot: 5460,
+                migration_type: SlotMigrationType::Migrating,
+                remote_node_id: "e02a1b2c3d4e5f60718293a4b5c6d7e8f9012345".to_string(),
+                remote_node_repr: "@node-2 (127.0.0.1:6380)".to_string(),
+            }],
+            repl_offset: Some(145_210),
         };
 
         let replica1 = ClusterNode {
@@ -170,12 +314,15 @@ impl ClusterTopology {
             cport: 16382,
             role: "Replica".to_string(),
             master_id: Some("node-1".to_string()),
-            is_healthy: true,
-            ping_ms: 0.45,
+            is_healthy: false,
+            health_state: NodeHealthState::Pfail,
+            ping_ms: 0.0,
             slots_raw: "replica-of node-1".to_string(),
             slot_ranges: Vec::new(),
             slot_count: 0,
             key_count: 402_830,
+            migrations: Vec::new(),
+            repl_offset: Some(142_980),
         };
 
         let master2 = ClusterNode {
@@ -186,11 +333,19 @@ impl ClusterTopology {
             role: "Master".to_string(),
             master_id: None,
             is_healthy: true,
+            health_state: NodeHealthState::Healthy,
             ping_ms: 0.41,
             slots_raw: "5461-10922".to_string(),
             slot_ranges: vec![(5461, 10922)],
             slot_count: 5462,
             key_count: 398_410,
+            migrations: vec![SlotMigration {
+                slot: 5460,
+                migration_type: SlotMigrationType::Importing,
+                remote_node_id: "e01a1b2c3d4e5f60718293a4b5c6d7e8f9012345".to_string(),
+                remote_node_repr: "@node-1 (127.0.0.1:6379)".to_string(),
+            }],
+            repl_offset: Some(139_400),
         };
 
         let replica2 = ClusterNode {
@@ -201,11 +356,14 @@ impl ClusterTopology {
             role: "Replica".to_string(),
             master_id: Some("node-2".to_string()),
             is_healthy: true,
+            health_state: NodeHealthState::Healthy,
             ping_ms: 0.50,
             slots_raw: "replica-of node-2".to_string(),
             slot_ranges: Vec::new(),
             slot_count: 0,
             key_count: 398_410,
+            migrations: Vec::new(),
+            repl_offset: Some(139_400),
         };
 
         let master3 = ClusterNode {
@@ -216,11 +374,14 @@ impl ClusterTopology {
             role: "Master".to_string(),
             master_id: None,
             is_healthy: true,
+            health_state: NodeHealthState::Healthy,
             ping_ms: 0.35,
             slots_raw: "10923-16383".to_string(),
             slot_ranges: vec![(10923, 16383)],
             slot_count: 5461,
             key_count: 407_250,
+            migrations: Vec::new(),
+            repl_offset: Some(150_200),
         };
 
         let replica3 = ClusterNode {
@@ -231,11 +392,14 @@ impl ClusterTopology {
             role: "Replica".to_string(),
             master_id: Some("node-3".to_string()),
             is_healthy: true,
+            health_state: NodeHealthState::Healthy,
             ping_ms: 0.48,
             slots_raw: "replica-of node-3".to_string(),
             slot_ranges: Vec::new(),
             slot_count: 0,
             key_count: 407_250,
+            migrations: Vec::new(),
+            repl_offset: Some(150_200),
         };
 
         let shards = vec![
@@ -270,13 +434,56 @@ impl ClusterTopology {
             shards,
             standalone_nodes: Vec::new(),
             total_nodes: 6,
-            healthy_nodes: 6,
+            healthy_nodes: 5,
             covered_slots: 16384,
             is_fully_covered: true,
             is_cluster: true,
+            cluster_state_ok: true,
+            health_status: ClusterHealthStatus::Degraded,
+            health_summary: "1 PFAIL · 1 slot migrating · Redundancy Reduced".to_string(),
             replication: None,
             sentinel: None,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn mock_healthy_cluster_topology() -> Self {
+        let mut topo = Self::mock_cluster_topology();
+        topo.health_status = ClusterHealthStatus::Healthy;
+        topo.health_summary = "All nodes healthy · Slots 100% OK".to_string();
+        topo.healthy_nodes = 6;
+        for shard in &mut topo.shards {
+            shard.master.migrations.clear();
+            for rep in &mut shard.replicas {
+                rep.health_state = NodeHealthState::Healthy;
+                rep.is_healthy = true;
+                rep.ping_ms = 0.45;
+                rep.repl_offset = shard.master.repl_offset;
+            }
+        }
+        topo
+    }
+
+    #[allow(dead_code)]
+    pub fn mock_failed_cluster_topology() -> Self {
+        let mut topo = Self::mock_cluster_topology();
+        topo.health_status = ClusterHealthStatus::Failed;
+        topo.cluster_state_ok = false;
+        topo.is_fully_covered = false;
+        topo.covered_slots = 10923;
+        topo.health_summary = "cluster_state: fail · 10923/16384 covered [CRITICAL]".to_string();
+        if let Some(shard1) = topo.shards.first_mut() {
+            shard1.master.health_state = NodeHealthState::Fail;
+            shard1.master.is_healthy = false;
+            shard1.master.ping_ms = 0.0;
+            for rep in &mut shard1.replicas {
+                rep.health_state = NodeHealthState::Fail;
+                rep.is_healthy = false;
+                rep.ping_ms = 0.0;
+            }
+        }
+        topo.healthy_nodes = 4;
+        topo
     }
 
     #[allow(dead_code)]
@@ -289,11 +496,14 @@ impl ClusterTopology {
             role: "Master".to_string(),
             master_id: None,
             is_healthy: true,
+            health_state: NodeHealthState::Healthy,
             ping_ms: 0.38,
             slots_raw: "All keys (Standalone DB 0~15)".to_string(),
             slot_ranges: Vec::new(),
             slot_count: 0,
             key_count: 1_208_490,
+            migrations: Vec::new(),
+            repl_offset: Some(142_980),
         };
 
         Self {
@@ -305,6 +515,9 @@ impl ClusterTopology {
             covered_slots: 0,
             is_fully_covered: true,
             is_cluster: false,
+            cluster_state_ok: true,
+            health_status: ClusterHealthStatus::Healthy,
+            health_summary: "Standalone operational".to_string(),
             replication: Some(ReplicationInfo::default()),
             sentinel: None,
         }
@@ -389,11 +602,14 @@ impl ClusterTopology {
             role: "Sentinel".to_string(),
             master_id: None,
             is_healthy: true,
+            health_state: NodeHealthState::Healthy,
             ping_ms: 0.42,
             slots_raw: "Quorum: 2 (3 in total) (Monitoring: mymaster)".to_string(),
             slot_ranges: Vec::new(),
             slot_count: 0,
             key_count: 0,
+            migrations: Vec::new(),
+            repl_offset: None,
         };
 
         Self {
@@ -405,6 +621,9 @@ impl ClusterTopology {
             covered_slots: 0,
             is_fully_covered: true,
             is_cluster: false,
+            cluster_state_ok: true,
+            health_status: ClusterHealthStatus::Healthy,
+            health_summary: "Sentinel monitoring active".to_string(),
             replication: None,
             sentinel: Some(sentinel_topo),
         }
@@ -414,7 +633,12 @@ impl ClusterTopology {
 pub struct ClusterTopologyParser;
 
 impl ClusterTopologyParser {
+    #[allow(dead_code)]
     pub fn parse_cluster_nodes(raw_str: &str, default_ping_ms: f64) -> ClusterTopology {
+        Self::parse_cluster_nodes_with_info(raw_str, default_ping_ms, None)
+    }
+
+    pub fn parse_cluster_nodes_with_info(raw_str: &str, default_ping_ms: f64, cluster_state_ok: Option<bool>) -> ClusterTopology {
         let mut raw_nodes = Vec::new();
         let mut node_map = std::collections::HashMap::new();
 
@@ -438,14 +662,15 @@ impl ClusterTopologyParser {
 
             let addr_part = parts[1];
             let (address, cport) = if let Some((ip_port, cport_str)) = addr_part.split_once('@') {
-                let cport = cport_str.parse::<u16>().unwrap_or(0);
+                let cport = cport_str.split(',').next().unwrap_or("0").parse::<u16>().unwrap_or(0);
                 (ip_port.to_string(), cport)
             } else {
                 (addr_part.to_string(), 0)
             };
 
             let flags = parts[2];
-            let is_master = flags.contains("master");
+            let flag_tokens: Vec<&str> = flags.split(',').collect();
+            let is_master = flag_tokens.contains(&"master");
             let role = if is_master { "Master" } else { "Replica" }.to_string();
 
             let master_id = if parts[3] != "-" && !parts[3].is_empty() {
@@ -455,20 +680,53 @@ impl ClusterTopologyParser {
             };
 
             let link_state = parts[7];
-            let is_healthy = link_state == "connected" && !flags.contains("fail");
+            let is_fail = flag_tokens.contains(&"fail");
+            let is_pfail = flag_tokens.contains(&"fail?");
+            let is_disconnected = link_state == "disconnected";
+
+            let health_state = if is_fail {
+                NodeHealthState::Fail
+            } else if is_pfail || is_disconnected {
+                NodeHealthState::Pfail
+            } else {
+                NodeHealthState::Healthy
+            };
+            let is_healthy = health_state == NodeHealthState::Healthy;
 
             let mut slot_ranges = Vec::new();
             let mut total_slots = 0u16;
             let mut slots_raw = String::new();
+            let mut migrations = Vec::new();
 
             if parts.len() > 8 {
                 let slot_parts = &parts[8..];
                 slots_raw = slot_parts.join(" ");
                 for slot_token in slot_parts {
-                    // Ignore importing/migrating slot syntax like [123->-node]
-                    if slot_token.starts_with('[') {
+                    // Check for migrating/importing: [slot->-target_node] or [slot-<-source_node]
+                    if slot_token.starts_with('[') && slot_token.ends_with(']') {
+                        let inner = &slot_token[1..slot_token.len() - 1];
+                        if let Some((slot_s, target_id)) = inner.split_once("->-") {
+                            if let Ok(s) = slot_s.parse::<u16>() {
+                                migrations.push(SlotMigration {
+                                    slot: s,
+                                    migration_type: SlotMigrationType::Migrating,
+                                    remote_node_id: target_id.to_string(),
+                                    remote_node_repr: String::new(),
+                                });
+                            }
+                        } else if let Some((slot_s, source_id)) = inner.split_once("-<-") {
+                            if let Ok(s) = slot_s.parse::<u16>() {
+                                migrations.push(SlotMigration {
+                                    slot: s,
+                                    migration_type: SlotMigrationType::Importing,
+                                    remote_node_id: source_id.to_string(),
+                                    remote_node_repr: String::new(),
+                                });
+                            }
+                        }
                         continue;
                     }
+
                     if let Some((start_s, end_s)) = slot_token.split_once('-') {
                         if let (Ok(s), Ok(e)) = (start_s.parse::<u16>(), end_s.parse::<u16>()) {
                             if e >= s {
@@ -493,16 +751,36 @@ impl ClusterTopologyParser {
                 role,
                 master_id,
                 is_healthy,
-                ping_ms: default_ping_ms,
+                health_state,
+                ping_ms: if is_healthy { default_ping_ms } else { 0.0 },
                 slots_raw,
                 slot_ranges,
                 slot_count: total_slots,
                 key_count: 0,
+                migrations,
+                repl_offset: None,
             };
 
             node_map.insert(raw_id.clone(), node.clone());
             node_map.insert(short_id, node.clone());
             raw_nodes.push(node);
+        }
+
+        // Post-pass: resolve remote node representations for slot migrations
+        for node in &mut raw_nodes {
+            for mig in &mut node.migrations {
+                let target_raw = &mig.remote_node_id;
+                let target_short = if target_raw.len() > 8 {
+                    &target_raw[..8]
+                } else {
+                    target_raw.as_str()
+                };
+                if let Some(target) = node_map.get(target_raw).or_else(|| node_map.get(target_short)) {
+                    mig.remote_node_repr = format!("@{} ({})", target.id, target.address);
+                } else {
+                    mig.remote_node_repr = format!("@{}", target_short);
+                }
+            }
         }
 
         // Group into Shards deterministically sorted by slot range start and address
@@ -548,8 +826,69 @@ impl ClusterTopologyParser {
 
         let total_nodes = raw_nodes.len();
         let healthy_nodes = raw_nodes.iter().filter(|n| n.is_healthy).count();
-        let covered_slots: u16 = shards.iter().map(|s| s.total_slots).sum();
+
+        // Count unique covered slots including those actively in migration
+        let mut all_slots = std::collections::HashSet::new();
+        for shard in &shards {
+            for (s, e) in &shard.slot_ranges {
+                for slot in *s..=*e {
+                    all_slots.insert(slot);
+                }
+            }
+            for mig in &shard.master.migrations {
+                all_slots.insert(mig.slot);
+            }
+            for rep in &shard.replicas {
+                for mig in &rep.migrations {
+                    all_slots.insert(mig.slot);
+                }
+            }
+        }
+        let covered_slots = all_slots.len() as u16;
         let is_fully_covered = covered_slots == 16384;
+
+        let master_count = shards.len();
+        let fail_masters = shards.iter().filter(|s| s.master.health_state == NodeHealthState::Fail).count();
+        let pfail_nodes = raw_nodes.iter().filter(|n| n.health_state == NodeHealthState::Pfail).count();
+        let fail_nodes = raw_nodes.iter().filter(|n| n.health_state == NodeHealthState::Fail).count();
+        let total_migrations: usize = shards.iter().map(|s| s.master.migrations.len() + s.replicas.iter().map(|r| r.migrations.len()).sum::<usize>()).sum();
+
+        let broken_shards = shards.iter().filter(|s| {
+            s.master.health_state == NodeHealthState::Fail
+                && s.replicas.iter().all(|r| r.health_state == NodeHealthState::Fail)
+        }).count();
+
+        let state_ok = cluster_state_ok.unwrap_or(true);
+
+        let (health_status, health_summary) = if !state_ok || !is_fully_covered || broken_shards > 0 || (master_count > 0 && fail_masters * 2 >= master_count) {
+            let reason = if !state_ok {
+                "cluster_state: fail".to_string()
+            } else if !is_fully_covered {
+                format!("{}/16384 slots covered [CRITICAL]", covered_slots)
+            } else if broken_shards > 0 {
+                format!("{} shard(s) completely offline", broken_shards)
+            } else {
+                "Master quorum lost".to_string()
+            };
+            (ClusterHealthStatus::Failed, reason)
+        } else if pfail_nodes > 0 || fail_nodes > 0 || total_migrations > 0 || shards.iter().any(|s| s.replicas.is_empty()) {
+            let mut reasons = Vec::new();
+            if pfail_nodes > 0 {
+                reasons.push(format!("{} PFAIL", pfail_nodes));
+            }
+            if fail_nodes > 0 {
+                reasons.push(format!("{} FAIL", fail_nodes));
+            }
+            if total_migrations > 0 {
+                reasons.push(format!("{} slot(s) migrating", total_migrations));
+            }
+            if shards.iter().any(|s| s.replicas.is_empty()) {
+                reasons.push("Redundancy reduced".to_string());
+            }
+            (ClusterHealthStatus::Degraded, reasons.join(" · "))
+        } else {
+            (ClusterHealthStatus::Healthy, "All nodes healthy · Slots 100% OK".to_string())
+        };
 
         ClusterTopology {
             mode: RedisTopologyMode::Cluster,
@@ -560,9 +899,27 @@ impl ClusterTopologyParser {
             covered_slots,
             is_fully_covered,
             is_cluster: true,
+            cluster_state_ok: state_ok,
+            health_status,
+            health_summary,
             replication: None,
             sentinel: None,
         }
+    }
+
+    pub fn parse_cluster_info(raw_str: &str) -> (bool, Option<u16>) {
+        let mut state_ok = true;
+        let mut slots_ok = None;
+        for line in raw_str.lines() {
+            if let Some((k, v)) = line.trim().split_once(':') {
+                match k.trim() {
+                    "cluster_state" => state_ok = v.trim().eq_ignore_ascii_case("ok"),
+                    "cluster_slots_ok" => slots_ok = v.trim().parse().ok(),
+                    _ => {}
+                }
+            }
+        }
+        (state_ok, slots_ok)
     }
 
     pub fn parse_info_replication(raw_str: &str) -> ReplicationInfo {
