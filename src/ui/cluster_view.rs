@@ -352,11 +352,18 @@ impl ClusterView {
             theme.status_critical
         };
 
-        let total_migrations: usize = topology
-            .shards
-            .iter()
-            .map(|s| s.master.migrations.len() + s.replicas.iter().map(|r| r.migrations.len()).sum::<usize>())
-            .sum();
+        let mut unique_migrating_slots = std::collections::HashSet::new();
+        for shard in &topology.shards {
+            for mig in &shard.master.migrations {
+                unique_migrating_slots.insert(mig.slot);
+            }
+            for rep in &shard.replicas {
+                for mig in &rep.migrations {
+                    unique_migrating_slots.insert(mig.slot);
+                }
+            }
+        }
+        let total_migrations = unique_migrating_slots.len();
 
         // Construct clean, non-redundant alert / reason text
         let alert_text = if topology.health_status == ClusterHealthStatus::Healthy {

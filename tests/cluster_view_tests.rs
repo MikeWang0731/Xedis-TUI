@@ -567,7 +567,7 @@ fn test_summary_header_never_overflows_and_wraps_cleanly() {
     assert!(full_content.contains("Shards: 2"));
     assert!(full_content.contains("Slots: 16384/16384 (100%)"));
     assert!(full_content.contains("↳ Alerts:"));
-    assert!(full_content.contains("Active Migration: 2 slots"));
+    assert!(full_content.contains("Active Migration: 1 slot"));
 
     // Ensure right borders are intact and no character overwrote the outer border
     for y in 0..buffer.area.height {

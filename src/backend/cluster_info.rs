@@ -851,7 +851,18 @@ impl ClusterTopologyParser {
         let fail_masters = shards.iter().filter(|s| s.master.health_state == NodeHealthState::Fail).count();
         let pfail_nodes = raw_nodes.iter().filter(|n| n.health_state == NodeHealthState::Pfail).count();
         let fail_nodes = raw_nodes.iter().filter(|n| n.health_state == NodeHealthState::Fail).count();
-        let total_migrations: usize = shards.iter().map(|s| s.master.migrations.len() + s.replicas.iter().map(|r| r.migrations.len()).sum::<usize>()).sum();
+        let mut unique_migrating_slots = std::collections::HashSet::new();
+        for shard in &shards {
+            for mig in &shard.master.migrations {
+                unique_migrating_slots.insert(mig.slot);
+            }
+            for rep in &shard.replicas {
+                for mig in &rep.migrations {
+                    unique_migrating_slots.insert(mig.slot);
+                }
+            }
+        }
+        let total_migrations = unique_migrating_slots.len();
 
         let broken_shards = shards.iter().filter(|s| {
             s.master.health_state == NodeHealthState::Fail
