@@ -1,4 +1,4 @@
-use crate::backend::cluster_info::{ClusterTopology, RedisTopologyMode};
+use crate::backend::cluster_info::{ClusterNode, ClusterTopology, RedisTopologyMode};
 use crate::ui::theme::ThemePalette;
 use ratatui::{
     layout::Rect,
@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem},
     Frame,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub struct ClusterView;
 
@@ -105,14 +106,11 @@ impl ClusterView {
         }
 
         // Card box width (leave 1 char margin on left/right)
-        let box_w = width.saturating_sub(1).max(24);
+        let box_w = width.saturating_sub(1).max(28);
 
-        // 2. Render each shard in a perfectly bounded rounded card
+        // 2. Render each shard in a perfectly bounded rounded card with dedicated node boxes
         for shard in &topology.shards {
             let mut lines = Vec::new();
-
-            let master_status_color = if shard.master.is_healthy { theme.status_healthy } else { theme.status_critical };
-            let master_status_str = if shard.master.is_healthy { "[HEALTHY]" } else { "[FAIL]" };
 
             // Top Border: ╭── Shard #1 ──────────────────────────────╮
             let shard_title = format!(" ╭── Shard #{} ", shard.shard_index);
@@ -123,47 +121,40 @@ impl ClusterView {
                 Span::styled("╮", Style::default().fg(theme.shard_border)),
             ]));
 
-            // Master Info Row(s)
-            if width >= 65 {
-                // Tier 1: Wide layout (Single row)
-                lines.push(Line::from(vec![
-                    Span::styled(" │ ", Style::default().fg(theme.shard_border)),
-                    Span::styled("[Master] ", Style::default().fg(theme.shard_master_title).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("@{} ", shard.master.id), Style::default().fg(theme.shard_node_id)),
-                    Span::styled(format!("{} ", shard.master.address), Style::default().fg(theme.text_primary)),
-                    Span::styled(format!("{} ", master_status_str), Style::default().fg(master_status_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("Ping: {:.1}ms", shard.master.ping_ms), Style::default().fg(theme.text_muted)),
-                ]));
-            } else if width >= 42 {
-                // Tier 2: Medium layout (Stacked 2 rows)
-                lines.push(Line::from(vec![
-                    Span::styled(" │ ", Style::default().fg(theme.shard_border)),
-                    Span::styled("[Master] ", Style::default().fg(theme.shard_master_title).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("@{} ", shard.master.id), Style::default().fg(theme.shard_node_id)),
-                    Span::styled(format!("{}", master_status_str), Style::default().fg(master_status_color).add_modifier(Modifier::BOLD)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled(" │   ", Style::default().fg(theme.shard_border)),
-                    Span::styled(format!("{} · Ping: {:.1}ms", shard.master.address, shard.master.ping_ms), Style::default().fg(theme.text_primary)),
-                ]));
+            // Master Box sizing
+            let master_box_w = box_w.saturating_sub(7).max(18);
+            let outer_right_spaces = box_w.saturating_sub(4 + master_box_w + 1);
+            let master_content_w = master_box_w.saturating_sub(4);
+
+            // Master Top Border: ╭── Master #1 ────────────────────────╮
+            let m_full_title = format!("Master #{}", shard.shard_index);
+            let (m_prefix, m_label) = if master_box_w >= 4 + m_full_title.chars().count() + 2 {
+                ("╭── ", m_full_title)
+            } else if master_box_w >= 14 {
+                ("╭── ", "Master".to_string())
             } else {
-                // Tier 3: Ultra-compact layout (Stacked 3 rows)
-                lines.push(Line::from(vec![
-                    Span::styled(" │ ", Style::default().fg(theme.shard_border)),
-                    Span::styled("[Master] ", Style::default().fg(theme.shard_master_title).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("@{}", shard.master.id), Style::default().fg(theme.shard_node_id)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled(" │   ", Style::default().fg(theme.shard_border)),
-                    Span::styled(shard.master.address.clone(), Style::default().fg(theme.text_primary)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled(" │   ", Style::default().fg(theme.shard_border)),
-                    Span::styled(format!("{} · {:.1}ms", master_status_str, shard.master.ping_ms), Style::default().fg(master_status_color)),
-                ]));
+                ("╭─ ", "M".to_string())
+            };
+            let m_title_len = m_prefix.chars().count() + m_label.chars().count() + 1;
+            let m_dash_count = master_box_w.saturating_sub(m_title_len + 1);
+            lines.push(Line::from(vec![
+                Span::styled(" │  ", Style::default().fg(theme.shard_border)),
+                Span::styled(m_prefix, Style::default().fg(theme.shard_border)),
+                Span::styled(m_label, Style::default().fg(theme.shard_master_title).add_modifier(Modifier::BOLD)),
+                Span::styled(" ", Style::default().fg(theme.shard_border)),
+                Span::styled("─".repeat(m_dash_count), Style::default().fg(theme.shard_border)),
+                Span::styled("╮", Style::default().fg(theme.shard_border)),
+                Span::raw(" ".repeat(outer_right_spaces)),
+                Span::styled("│", Style::default().fg(theme.shard_border)),
+            ]));
+
+            // Master Info Row(s)
+            let master_info_rows = Self::format_node_info(&shard.master, master_content_w, theme);
+            for row_spans in master_info_rows {
+                Self::push_boxed_line(&mut lines, " │  ", row_spans, master_content_w, outer_right_spaces, theme);
             }
 
-            // Slots Info (with multiline wrapping)
+            // Master Slots Row(s)
             let slot_prefix = "Slots: ";
             let raw_ranges = if !shard.slot_ranges.is_empty() {
                 let ranges: Vec<String> = shard.slot_ranges.iter().map(|(s, e)| format!("{}-{}", s, e)).collect();
@@ -172,75 +163,127 @@ impl ClusterView {
                 format!("{} ({} slots)", shard.master.slots_raw, shard.total_slots)
             };
 
-            let max_slot_w = box_w.saturating_sub(12).max(16);
-            if raw_ranges.len() <= max_slot_w {
-                lines.push(Line::from(vec![
-                    Span::styled(" │   ", Style::default().fg(theme.shard_border)),
+            let max_slot_val_w = master_content_w.saturating_sub(7);
+            if raw_ranges.width() <= max_slot_val_w {
+                let slot_spans = vec![
                     Span::styled(slot_prefix, Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
                     Span::styled(raw_ranges, Style::default().fg(theme.shard_slot_range)),
-                ]));
+                ];
+                Self::push_boxed_line(&mut lines, " │  ", slot_spans, master_content_w, outer_right_spaces, theme);
             } else {
-                let chunks = Self::wrap_slots(&raw_ranges, max_slot_w);
+                let chunks = Self::wrap_slots(&raw_ranges, max_slot_val_w.max(10));
                 for (idx, chunk) in chunks.iter().enumerate() {
-                    if idx == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │   ", Style::default().fg(theme.shard_border)),
+                    let fit_chunk = Self::fit_str_to_width(chunk, max_slot_val_w);
+                    let slot_spans = if idx == 0 {
+                        vec![
                             Span::styled(slot_prefix, Style::default().fg(theme.shard_slot_label).add_modifier(Modifier::BOLD)),
-                            Span::styled(chunk.clone(), Style::default().fg(theme.shard_slot_range)),
-                        ]));
+                            Span::styled(fit_chunk, Style::default().fg(theme.shard_slot_range)),
+                        ]
                     } else {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │          ", Style::default().fg(theme.shard_border)),
-                            Span::styled(chunk.clone(), Style::default().fg(theme.shard_slot_range)),
-                        ]));
-                    }
+                        vec![
+                            Span::raw("       "),
+                            Span::styled(fit_chunk, Style::default().fg(theme.shard_slot_range)),
+                        ]
+                    };
+                    Self::push_boxed_line(&mut lines, " │  ", slot_spans, master_content_w, outer_right_spaces, theme);
                 }
             }
 
-            // Replicas Info
+            // Master Bottom Border: ╰──────────────────────────────────╯
+            let m_bot_dashes = master_box_w.saturating_sub(2);
+            lines.push(Line::from(vec![
+                Span::styled(" │  ", Style::default().fg(theme.shard_border)),
+                Span::styled("╰", Style::default().fg(theme.shard_border)),
+                Span::styled("─".repeat(m_bot_dashes), Style::default().fg(theme.shard_border)),
+                Span::styled("╯", Style::default().fg(theme.shard_border)),
+                Span::raw(" ".repeat(outer_right_spaces)),
+                Span::styled("│", Style::default().fg(theme.shard_border)),
+            ]));
+
+            // Replicas Hierarchy & Boxes
             if shard.replicas.is_empty() {
+                let mid_spaces = box_w.saturating_sub(6);
                 lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.shard_border)),
-                    Span::styled("   └── ", Style::default().fg(theme.shard_border)),
-                    Span::styled("(No replicas configured)", Style::default().fg(theme.text_muted)),
+                    Span::styled(" │  ", Style::default().fg(theme.shard_border)),
+                    Span::styled("│", Style::default().fg(theme.shard_border)),
+                    Span::raw(" ".repeat(mid_spaces)),
+                    Span::styled("│", Style::default().fg(theme.shard_border)),
+                ]));
+
+                let text = "(No replicas configured)";
+                let text_w = text.chars().count();
+                let text_pad = box_w.saturating_sub(4 + 4 + text_w + 1);
+                lines.push(Line::from(vec![
+                    Span::styled(" │  ", Style::default().fg(theme.shard_border)),
+                    Span::styled("└── ", Style::default().fg(theme.shard_border)),
+                    Span::styled(text, Style::default().fg(theme.text_muted)),
+                    Span::raw(" ".repeat(text_pad)),
+                    Span::styled("│", Style::default().fg(theme.shard_border)),
                 ]));
             } else {
+                let replica_box_w = master_box_w.saturating_sub(4).max(14);
+                let replica_content_w = replica_box_w.saturating_sub(4);
+
                 for (rep_idx, replica) in shard.replicas.iter().enumerate() {
                     let is_last = rep_idx == shard.replicas.len() - 1;
-                    let branch_stem = if is_last { "   └── " } else { "   ├── " };
-                    let rep_status_color = if replica.is_healthy { theme.status_healthy } else { theme.status_critical };
-                    let rep_status_str = if replica.is_healthy { "[HEALTHY]" } else { "[FAIL]" };
+                    let branch_stem = if is_last { "└── " } else { "├── " };
+                    let content_stem = if is_last { "    " } else { "│   " };
 
-                    if width >= 65 {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.shard_border)),
-                            Span::styled(branch_stem, Style::default().fg(theme.shard_border)),
-                            Span::styled("[Replica] ", Style::default().fg(theme.shard_replica_title)),
-                            Span::styled(format!("@{} ", replica.id), Style::default().fg(theme.shard_node_id)),
-                            Span::styled(format!("{} ", replica.address), Style::default().fg(theme.text_secondary)),
-                            Span::styled(format!("{} ", rep_status_str), Style::default().fg(rep_status_color)),
-                            Span::styled(format!("{:.1}ms", replica.ping_ms), Style::default().fg(theme.text_muted)),
-                        ]));
+                    // Vertical connecting line from above
+                    let mid_spaces = box_w.saturating_sub(6);
+                    lines.push(Line::from(vec![
+                        Span::styled(" │  ", Style::default().fg(theme.shard_border)),
+                        Span::styled("│", Style::default().fg(theme.shard_border)),
+                        Span::raw(" ".repeat(mid_spaces)),
+                        Span::styled("│", Style::default().fg(theme.shard_border)),
+                    ]));
+
+                    // Replica Top Border
+                    let r_full_title = format!("Replica #{}", rep_idx + 1);
+                    let (r_prefix, r_label) = if replica_box_w >= 4 + r_full_title.chars().count() + 2 {
+                        ("╭── ", r_full_title)
+                    } else if replica_box_w >= 15 {
+                        ("╭── ", "Replica".to_string())
                     } else {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.shard_border)),
-                            Span::styled(branch_stem, Style::default().fg(theme.shard_border)),
-                            Span::styled("[Replica] ", Style::default().fg(theme.shard_replica_title)),
-                            Span::styled(format!("@{} ", replica.id), Style::default().fg(theme.shard_node_id)),
-                            Span::styled(format!("{}", rep_status_str), Style::default().fg(rep_status_color)),
-                        ]));
-                        let pad = if is_last { "       " } else { "   │   " };
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.shard_border)),
-                            Span::styled(pad, Style::default().fg(theme.shard_border)),
-                            Span::styled(format!("{} · {:.1}ms", replica.address, replica.ping_ms), Style::default().fg(theme.text_muted)),
-                        ]));
+                        ("╭─ ", "R".to_string())
+                    };
+                    let r_title_len = r_prefix.chars().count() + r_label.chars().count() + 1;
+                    let r_dash_count = replica_box_w.saturating_sub(r_title_len + 1);
+                    lines.push(Line::from(vec![
+                        Span::styled(" │  ", Style::default().fg(theme.shard_border)),
+                        Span::styled(branch_stem, Style::default().fg(theme.shard_border)),
+                        Span::styled(r_prefix, Style::default().fg(theme.shard_border)),
+                        Span::styled(r_label, Style::default().fg(theme.shard_replica_title).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ", Style::default().fg(theme.shard_border)),
+                        Span::styled("─".repeat(r_dash_count), Style::default().fg(theme.shard_border)),
+                        Span::styled("╮", Style::default().fg(theme.shard_border)),
+                        Span::raw(" ".repeat(outer_right_spaces)),
+                        Span::styled("│", Style::default().fg(theme.shard_border)),
+                    ]));
+
+                    // Replica Content Row(s)
+                    let replica_prefix = format!(" │  {}", content_stem);
+                    let rep_rows = Self::format_node_info(replica, replica_content_w, theme);
+                    for row_spans in rep_rows {
+                        Self::push_boxed_line(&mut lines, &replica_prefix, row_spans, replica_content_w, outer_right_spaces, theme);
                     }
+
+                    // Replica Bottom Border
+                    let r_bot_dashes = replica_box_w.saturating_sub(2);
+                    lines.push(Line::from(vec![
+                        Span::styled(" │  ", Style::default().fg(theme.shard_border)),
+                        Span::styled(content_stem, Style::default().fg(theme.shard_border)),
+                        Span::styled("╰", Style::default().fg(theme.shard_border)),
+                        Span::styled("─".repeat(r_bot_dashes), Style::default().fg(theme.shard_border)),
+                        Span::styled("╯", Style::default().fg(theme.shard_border)),
+                        Span::raw(" ".repeat(outer_right_spaces)),
+                        Span::styled("│", Style::default().fg(theme.shard_border)),
+                    ]));
                 }
             }
 
             // Bottom Border: ╰──────────────────────────────────────╯
-            let bot_dash_count = box_w.saturating_sub(2);
+            let bot_dash_count = box_w.saturating_sub(3);
             lines.push(Line::from(vec![
                 Span::styled(" ╰", Style::default().fg(theme.shard_border)),
                 Span::styled("─".repeat(bot_dash_count), Style::default().fg(theme.shard_border)),
@@ -249,6 +292,134 @@ impl ClusterView {
 
             lines.push(Line::from(""));
             items.push(ListItem::new(lines));
+        }
+    }
+
+    fn fit_str_to_width(s: &str, max_w: usize) -> String {
+        let sw = s.width();
+        if sw <= max_w {
+            return s.to_string();
+        }
+        if max_w == 0 {
+            return String::new();
+        }
+        if max_w == 1 {
+            return "…".to_string();
+        }
+
+        let target_w = max_w - 1; // 1 column for '…'
+        let mut cur_w = 0;
+        let mut res = String::new();
+        for c in s.chars() {
+            let cw = c.width().unwrap_or(0);
+            if cur_w + cw > target_w {
+                break;
+            }
+            res.push(c);
+            cur_w += cw;
+        }
+        res.push('…');
+        res
+    }
+
+    fn spans_width(spans: &[Span]) -> usize {
+        spans.iter().map(|s| s.content.as_ref().width()).sum()
+    }
+
+    fn push_boxed_line(
+        lines: &mut Vec<Line<'static>>,
+        left_decor: &str,
+        spans: Vec<Span<'static>>,
+        content_w: usize,
+        outer_right_spaces: usize,
+        theme: &ThemePalette,
+    ) {
+        let sw = Self::spans_width(&spans);
+        let pad_len = content_w.saturating_sub(sw);
+        let mut line_spans = Vec::with_capacity(spans.len() + 6);
+        line_spans.push(Span::styled(left_decor.to_string(), Style::default().fg(theme.shard_border)));
+        line_spans.push(Span::styled("│ ", Style::default().fg(theme.shard_border)));
+        line_spans.extend(spans);
+        if pad_len > 0 {
+            line_spans.push(Span::raw(" ".repeat(pad_len)));
+        }
+        line_spans.push(Span::styled(" │", Style::default().fg(theme.shard_border)));
+        if outer_right_spaces > 0 {
+            line_spans.push(Span::raw(" ".repeat(outer_right_spaces)));
+        }
+        line_spans.push(Span::styled("│", Style::default().fg(theme.shard_border)));
+        lines.push(Line::from(line_spans));
+    }
+
+    fn format_node_info(
+        node: &ClusterNode,
+        content_w: usize,
+        theme: &ThemePalette,
+    ) -> Vec<Vec<Span<'static>>> {
+        let (status_str, status_color) = if node.is_healthy {
+            ("[HEALTHY]", theme.status_healthy)
+        } else {
+            ("[FAIL]", theme.status_critical)
+        };
+
+        let id_str = format!("@{}", node.id);
+        let ping_str = format!("Ping: {:.1}ms", node.ping_ms);
+        let short_ping = format!("{:.1}ms", node.ping_ms);
+
+        // Single line width: "@id address [HEALTHY] Ping: 3.0ms"
+        let single_line_w = id_str.width() + 1 + node.address.width() + 1 + status_str.len() + 1 + ping_str.len();
+
+        if content_w >= single_line_w {
+            vec![vec![
+                Span::styled(id_str, Style::default().fg(theme.shard_node_id)),
+                Span::raw(" "),
+                Span::styled(node.address.clone(), Style::default().fg(theme.text_primary)),
+                Span::raw(" "),
+                Span::styled(status_str, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(ping_str, Style::default().fg(theme.text_muted)),
+            ]]
+        } else {
+            let line1_w = id_str.width() + 1 + status_str.len() + 1 + short_ping.len();
+            if content_w >= line1_w.max(20) {
+                // Tier 2: Medium layout (2 rows)
+                let ping_display = if id_str.width() + 1 + status_str.len() + 1 + ping_str.len() <= content_w {
+                    ping_str
+                } else {
+                    short_ping
+                };
+                let row1 = vec![
+                    Span::styled(id_str, Style::default().fg(theme.shard_node_id)),
+                    Span::raw(" "),
+                    Span::styled(status_str, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                    Span::raw(" "),
+                    Span::styled(ping_display, Style::default().fg(theme.text_muted)),
+                ];
+                let row2 = vec![
+                    Span::styled(Self::fit_str_to_width(&node.address, content_w), Style::default().fg(theme.text_primary)),
+                ];
+                vec![row1, row2]
+            } else {
+                // Tier 3: Compact layout (3 rows)
+                let status_label = if content_w < 18 && status_str == "[HEALTHY]" {
+                    "[OK]"
+                } else {
+                    status_str
+                };
+                let id_display = Self::fit_str_to_width(&id_str, content_w.saturating_sub(status_label.len() + 1));
+                let row1 = vec![
+                    Span::styled(id_display, Style::default().fg(theme.shard_node_id)),
+                    Span::raw(" "),
+                    Span::styled(status_label, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                ];
+                let row2 = vec![
+                    Span::styled(Self::fit_str_to_width(&node.address, content_w), Style::default().fg(theme.text_primary)),
+                ];
+                let row3 = vec![
+                    Span::styled(Self::fit_str_to_width(&ping_str, content_w), Style::default().fg(theme.text_muted)),
+                ];
+                vec![row1, row2, row3]
+            }
         }
     }
 
@@ -407,7 +578,7 @@ impl ClusterView {
         }
 
         // Bottom border
-        let bot_dash_count = box_w.saturating_sub(2);
+        let bot_dash_count = box_w.saturating_sub(3);
         lines.push(Line::from(vec![
             Span::styled(" ╰", Style::default().fg(theme.cluster_border)),
             Span::styled("─".repeat(bot_dash_count), Style::default().fg(theme.cluster_border)),
@@ -666,7 +837,7 @@ impl ClusterView {
             }
 
             // Card bottom border
-            let bot_dash_count = box_w.saturating_sub(2);
+            let bot_dash_count = box_w.saturating_sub(3);
             lines.push(Line::from(vec![
                 Span::styled(" ╰", Style::default().fg(theme.sentinel_border)),
                 Span::styled("─".repeat(bot_dash_count), Style::default().fg(theme.sentinel_border)),
