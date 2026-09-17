@@ -8,7 +8,7 @@ use app::App;
 use clap::Parser;
 use config::{AppConfig, LayoutPreset};
 use crossterm::{
-    event::{self, Event},
+    event::{self, Event, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -103,7 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                app.handle_key(key).await;
+                // On Windows (and terminals with enhanced keyboard support), crossterm emits
+                // both Press and Release events for each keystroke. Filter out Release events.
+                if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
+                    app.handle_key(key).await;
+                }
             }
         }
 

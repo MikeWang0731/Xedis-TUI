@@ -7,7 +7,7 @@ use crate::core::macro_engine::MacroEngine;
 use crate::core::router::{CommandRouter, CommandType, ParsedCommand};
 use crate::ui::stream_view::{ExecutionRecord, StreamView};
 use chrono::Local;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +170,11 @@ impl App {
     }
 
     pub async fn handle_key(&mut self, key: KeyEvent) {
+        // Ignore key release events to prevent double input on Windows / enhanced keyboard protocol
+        if key.kind == KeyEventKind::Release {
+            return;
+        }
+
         // 0. Safety Guard Modal Interception (Top Priority)
         if self.pending_guard.is_some() {
             match key.code {
