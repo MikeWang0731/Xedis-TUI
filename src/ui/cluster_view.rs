@@ -39,7 +39,7 @@ impl ClusterView {
 
         let max_scroll = match topology.mode {
             RedisTopologyMode::Sentinel => {
-                topology.sentinel.as_ref().map_or(0, |s| s.masters.len().saturating_sub(1))
+                topology.sentinel.as_ref().map_or(0, |s| s.masters.len())
             }
             _ => topology.shards.len().saturating_sub(1),
         };
@@ -522,20 +522,31 @@ impl ClusterView {
         outer_right_spaces: usize,
         theme: &ThemePalette,
     ) {
+        Self::push_boxed_line_with_border(lines, left_decor, spans, content_w, outer_right_spaces, theme.shard_border);
+    }
+
+    fn push_boxed_line_with_border(
+        lines: &mut Vec<Line<'static>>,
+        left_decor: &str,
+        spans: Vec<Span<'static>>,
+        content_w: usize,
+        outer_right_spaces: usize,
+        border_color: ratatui::style::Color,
+    ) {
         let sw = Self::spans_width(&spans);
         let pad_len = content_w.saturating_sub(sw);
         let mut line_spans = Vec::with_capacity(spans.len() + 6);
-        line_spans.push(Span::styled(left_decor.to_string(), Style::default().fg(theme.shard_border)));
-        line_spans.push(Span::styled("│ ", Style::default().fg(theme.shard_border)));
+        line_spans.push(Span::styled(left_decor.to_string(), Style::default().fg(border_color)));
+        line_spans.push(Span::styled("│ ", Style::default().fg(border_color)));
         line_spans.extend(spans);
         if pad_len > 0 {
             line_spans.push(Span::raw(" ".repeat(pad_len)));
         }
-        line_spans.push(Span::styled(" │", Style::default().fg(theme.shard_border)));
+        line_spans.push(Span::styled(" │", Style::default().fg(border_color)));
         if outer_right_spaces > 0 {
             line_spans.push(Span::raw(" ".repeat(outer_right_spaces)));
         }
-        line_spans.push(Span::styled("│", Style::default().fg(theme.shard_border)));
+        line_spans.push(Span::styled("│", Style::default().fg(border_color)));
         lines.push(Line::from(line_spans));
     }
 
@@ -942,6 +953,7 @@ impl ClusterView {
         };
 
         // 1. Adaptive Summary Header
+        let mut summary_lines = Vec::new();
         let mut summary_spans = vec![
             Span::styled(" [Sentinel Topology: ", Style::default().fg(theme.telemetry_label)),
             Span::styled(format!("Masters: {} ", total_masters), Style::default().fg(theme.telemetry_value).add_modifier(Modifier::BOLD)),
@@ -953,7 +965,7 @@ impl ClusterView {
         }
 
         if Self::spans_width(&summary_spans) <= width {
-            items.push(ListItem::new(vec![Line::from(summary_spans), Line::from("")]));
+            summary_lines.push(Line::from(summary_spans));
         } else if width >= 48 {
             let line1 = Line::from(vec![
                 Span::styled(" [Sentinel: ", Style::default().fg(theme.telemetry_label)),
@@ -964,7 +976,8 @@ impl ClusterView {
                 Span::styled(q_status_text, Style::default().fg(q_status_color).add_modifier(Modifier::BOLD)),
                 Span::styled("]", Style::default().fg(theme.telemetry_label)),
             ]);
-            items.push(ListItem::new(vec![line1, line2, Line::from("")]));
+            summary_lines.push(line1);
+            summary_lines.push(line2);
         } else {
             let line1 = Line::from(vec![
                 Span::styled(format!(" [Snt: {}M/{}S]", total_masters, total_sentinels), Style::default().fg(theme.border_focused)),
@@ -972,14 +985,18 @@ impl ClusterView {
             let line2 = Line::from(vec![
                 Span::styled(format!(" [{}]", if all_quorum_ok { "Quorum OK" } else { "WARN" }), Style::default().fg(q_status_color).add_modifier(Modifier::BOLD)),
             ]);
-            items.push(ListItem::new(vec![line1, line2, Line::from("")]));
+            summary_lines.push(line1);
+            summary_lines.push(line2);
         }
 
         let box_w = width.saturating_sub(1).max(24);
 
-        // 2. Render each Monitored Master Card
-        for master in &sentinel.masters {
-            let mut lines = Vec::new();
+        // 2. Render each Master-Replica Group (Data Layer: Master -> Replicas subordinate)
+        for (m_idx, master) in sentinel.masters.iter().enumerate() {
+            let mut master_lines = Vec::new();
+            if m_idx == 0 {
+                master_lines.extend(summary_lines.clone());
+            }
 
             let master_status_color = if master.status == "ok" {
                 theme.status_healthy
@@ -991,184 +1008,297 @@ impl ClusterView {
 
             let status_tag = format!("[{}]", master.status.to_uppercase());
 
-            // Card top border
-            let title = format!(" ╭── Master: {} ", master.name);
-            let dash_count = box_w.saturating_sub(title.chars().count() + 1);
-            lines.push(Line::from(vec![
-                Span::styled(title, Style::default().fg(theme.sentinel_border).add_modifier(Modifier::BOLD)),
+            // Card top border: ╭── Master: mymaster ─────────────────────╮
+            let m_card_title = format!(" ╭── Master: {} ", master.name);
+            let dash_count = box_w.saturating_sub(m_card_title.chars().count() + 1);
+            master_lines.push(Line::from(vec![
+                Span::styled(m_card_title, Style::default().fg(theme.sentinel_border).add_modifier(Modifier::BOLD)),
                 Span::styled("─".repeat(dash_count), Style::default().fg(theme.sentinel_border)),
                 Span::styled("╮", Style::default().fg(theme.sentinel_border)),
             ]));
 
-            // Master Endpoint & Status
-            if width >= 70 {
-                lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                    Span::styled("  Endpoint: ", Style::default().fg(theme.text_muted)),
-                    Span::styled(format!("{}:{} ", master.ip, master.port), Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("· Status: {} ", status_tag), Style::default().fg(master_status_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("· Quorum: {} ({} in total)", master.quorum, master.sentinels.len() + 1), Style::default().fg(theme.shard_slot_label)),
-                ]));
+            // Master Box sizing
+            let master_box_w = box_w.saturating_sub(7).max(18);
+            let outer_right_spaces = box_w.saturating_sub(4 + master_box_w + 1);
+            let master_content_w = master_box_w.saturating_sub(4);
+
+            // Master Top Border:  │  ╭── Master ──────────────────────╮  │
+            let m_label = "Master";
+            let m_prefix = "╭── ";
+            let m_dash_count = master_box_w.saturating_sub(m_prefix.chars().count() + m_label.chars().count() + 2);
+            master_lines.push(Line::from(vec![
+                Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+                Span::styled(m_prefix, Style::default().fg(theme.sentinel_border)),
+                Span::styled(m_label, Style::default().fg(theme.shard_master_title).add_modifier(Modifier::BOLD)),
+                Span::styled(" ", Style::default().fg(theme.sentinel_border)),
+                Span::styled("─".repeat(m_dash_count), Style::default().fg(theme.sentinel_border)),
+                Span::styled("╮", Style::default().fg(theme.sentinel_border)),
+                Span::raw(" ".repeat(outer_right_spaces)),
+                Span::styled("│", Style::default().fg(theme.sentinel_border)),
+            ]));
+
+            // Master Info Row 1: Endpoint, Status, Quorum
+            let full_info_spans = vec![
+                Span::styled("Endpoint: ", Style::default().fg(theme.text_muted)),
+                Span::styled(format!("{}:{} ", master.ip, master.port), Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("· Status: {} ", status_tag), Style::default().fg(master_status_color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("· Quorum: {} ({} in total)", master.quorum, master.sentinels.len() + 1), Style::default().fg(theme.shard_slot_label)),
+            ];
+
+            if Self::spans_width(&full_info_spans) <= master_content_w {
+                Self::push_boxed_line_with_border(&mut master_lines, " │  ", full_info_spans, master_content_w, outer_right_spaces, theme.sentinel_border);
             } else {
-                lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                    Span::styled("  Endpoint: ", Style::default().fg(theme.text_muted)),
-                    Span::styled(format!("{}:{}", master.ip, master.port), Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                    Span::styled("   ", Style::default().fg(theme.sentinel_border)),
-                    Span::styled(format!("Status: {} · Quorum: {} ({} in total)", status_tag, master.quorum, master.sentinels.len() + 1), Style::default().fg(master_status_color)),
-                ]));
+                let r1 = vec![
+                    Span::styled("Endpoint: ", Style::default().fg(theme.text_muted)),
+                    Span::styled(format!("{}:{} ", master.ip, master.port), Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(status_tag.clone(), Style::default().fg(master_status_color).add_modifier(Modifier::BOLD)),
+                ];
+                let r2 = vec![
+                    Span::styled(format!("Quorum: {} ({} in total)", master.quorum, master.sentinels.len() + 1), Style::default().fg(theme.shard_slot_label)),
+                ];
+                Self::push_boxed_line_with_border(&mut master_lines, " │  ", r1, master_content_w, outer_right_spaces, theme.sentinel_border);
+                Self::push_boxed_line_with_border(&mut master_lines, " │  ", r2, master_content_w, outer_right_spaces, theme.sentinel_border);
             }
 
-            // Down-after & Failover Timeout
-            lines.push(Line::from(vec![
-                Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                Span::styled("  Monitoring: ", Style::default().fg(theme.text_muted)),
+            // Master Info Row 2: Monitoring Down-After / Failover-Timeout
+            let mon_spans = vec![
+                Span::styled("Monitoring: ", Style::default().fg(theme.text_muted)),
                 Span::styled(format!("Down-After: {}s · Failover-Timeout: {}s", master.down_after_ms / 1000, master.failover_timeout_ms / 1000), Style::default().fg(theme.text_secondary)),
+            ];
+            if Self::spans_width(&mon_spans) <= master_content_w {
+                Self::push_boxed_line_with_border(&mut master_lines, " │  ", mon_spans, master_content_w, outer_right_spaces, theme.sentinel_border);
+            } else {
+                let fit_mon = Self::fit_str_to_width(&format!("Down: {}s · Failover: {}s", master.down_after_ms / 1000, master.failover_timeout_ms / 1000), master_content_w);
+                let r = vec![Span::styled(fit_mon, Style::default().fg(theme.text_secondary))];
+                Self::push_boxed_line_with_border(&mut master_lines, " │  ", r, master_content_w, outer_right_spaces, theme.sentinel_border);
+            }
+
+            // Master Bottom Border:  │  ╰─────────────────────────────────╯  │
+            let m_bot_dashes = master_box_w.saturating_sub(2);
+            master_lines.push(Line::from(vec![
+                Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+                Span::styled("╰", Style::default().fg(theme.sentinel_border)),
+                Span::styled("─".repeat(m_bot_dashes), Style::default().fg(theme.sentinel_border)),
+                Span::styled("╯", Style::default().fg(theme.sentinel_border)),
+                Span::raw(" ".repeat(outer_right_spaces)),
+                Span::styled("│", Style::default().fg(theme.sentinel_border)),
             ]));
 
-            // Slaves / Replicas Section
-            lines.push(Line::from(vec![
-                Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                Span::styled("  Connected Replicas: ", Style::default().fg(theme.text_muted)),
-                Span::styled(format!("{}", master.slaves.len()), Style::default().fg(theme.border_focused).add_modifier(Modifier::BOLD)),
-            ]));
-
+            // Replicas Subordinate Hierarchy & Boxes
             if master.slaves.is_empty() {
-                lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                    Span::styled("   └── ", Style::default().fg(theme.sentinel_border)),
-                    Span::styled("(No active replicas registered)", Style::default().fg(theme.text_muted)),
+                let text = "(No active replicas registered)";
+                let text_w = text.chars().count();
+                let text_pad = box_w.saturating_sub(4 + 4 + text_w + 1);
+                master_lines.push(Line::from(vec![
+                    Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+                    Span::styled("└── ", Style::default().fg(theme.sentinel_border)),
+                    Span::styled(text, Style::default().fg(theme.text_muted)),
+                    Span::raw(" ".repeat(text_pad)),
+                    Span::styled("│", Style::default().fg(theme.sentinel_border)),
                 ]));
             } else {
-                let slaves_len = master.slaves.len();
-                for (i, slave) in master.slaves.iter().enumerate() {
-                    let is_last = i + 1 == slaves_len;
-                    let branch = if is_last { "   └── " } else { "   ├── " };
+                let replica_box_w = master_box_w.saturating_sub(4).max(14);
+                let replica_content_w = replica_box_w.saturating_sub(4);
+                let outer_rep_right_spaces = box_w.saturating_sub(4 + 4 + replica_box_w + 1);
+
+                for (rep_idx, slave) in master.slaves.iter().enumerate() {
+                    let is_last = rep_idx == master.slaves.len() - 1;
+                    let branch_stem = if is_last { "└── " } else { "├── " };
+                    let content_stem = if is_last { "    " } else { "│   " };
+
+                    // Replica Top Border
+                    let r_full_title = format!("Replica #{} (Slave)", rep_idx + 1);
+                    let (r_prefix, r_label) = if replica_box_w >= 4 + r_full_title.chars().count() + 2 {
+                        ("╭── ", r_full_title)
+                    } else if replica_box_w >= 16 {
+                        ("╭── ", format!("Replica #{}", rep_idx + 1))
+                    } else {
+                        ("╭─ ", format!("R#{}", rep_idx + 1))
+                    };
+                    let r_title_len = r_prefix.chars().count() + r_label.chars().count() + 1;
+                    let r_dash_count = replica_box_w.saturating_sub(r_title_len + 1);
+                    master_lines.push(Line::from(vec![
+                        Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+                        Span::styled(branch_stem, Style::default().fg(theme.sentinel_border)),
+                        Span::styled(r_prefix, Style::default().fg(theme.sentinel_border)),
+                        Span::styled(r_label, Style::default().fg(theme.shard_replica_title).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ", Style::default().fg(theme.sentinel_border)),
+                        Span::styled("─".repeat(r_dash_count), Style::default().fg(theme.sentinel_border)),
+                        Span::styled("╮", Style::default().fg(theme.sentinel_border)),
+                        Span::raw(" ".repeat(outer_rep_right_spaces)),
+                        Span::styled("│", Style::default().fg(theme.sentinel_border)),
+                    ]));
+
+                    // Replica Content Rows
+                    let rep_left_decor = format!(" │  {}", content_stem);
                     let link_color = if slave.link_status == "ok" { theme.status_healthy } else { theme.status_critical };
 
-                    if width >= 65 {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                            Span::styled(branch, Style::default().fg(theme.sentinel_border)),
-                            Span::styled(format!("[Slave #{}] {}:{} ", i + 1, slave.ip, slave.port), Style::default().fg(theme.shard_replica_title)),
-                            Span::styled(format!("Link: [{}] · Offset: {} · Lag: {}s", slave.link_status.to_uppercase(), slave.repl_offset, slave.lag_sec), Style::default().fg(link_color)),
-                        ]));
+                    let rep_row_spans = vec![
+                        Span::styled(format!("[Slave #{}] ", rep_idx + 1), Style::default().fg(theme.shard_replica_title)),
+                        Span::styled(format!("{}:{} ", slave.ip, slave.port), Style::default().fg(theme.text_primary)),
+                        Span::styled(format!("Link: [{}] · Offset: {} · Lag: {}s", slave.link_status.to_uppercase(), slave.repl_offset, slave.lag_sec), Style::default().fg(link_color)),
+                    ];
+
+                    if Self::spans_width(&rep_row_spans) <= replica_content_w {
+                        Self::push_boxed_line_with_border(&mut master_lines, &rep_left_decor, rep_row_spans, replica_content_w, outer_rep_right_spaces, theme.sentinel_border);
                     } else {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                            Span::styled(branch, Style::default().fg(theme.sentinel_border)),
-                            Span::styled(format!("[Slave #{}] {}:{}", i + 1, slave.ip, slave.port), Style::default().fg(theme.shard_replica_title)),
-                        ]));
-                        let pad = if is_last { "       " } else { "   │   " };
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                            Span::styled(pad, Style::default().fg(theme.sentinel_border)),
-                            Span::styled(format!("Link: [{}] · Offset: {} · Lag: {}s", slave.link_status.to_uppercase(), slave.repl_offset, slave.lag_sec), Style::default().fg(link_color)),
-                        ]));
+                        let r1 = vec![
+                            Span::styled(format!("[Slave #{}] ", rep_idx + 1), Style::default().fg(theme.shard_replica_title)),
+                            Span::styled(format!("{}:{} ", slave.ip, slave.port), Style::default().fg(theme.text_primary)),
+                            Span::styled(format!("Link: [{}]", slave.link_status.to_uppercase()), Style::default().fg(link_color)),
+                        ];
+                        Self::push_boxed_line_with_border(&mut master_lines, &rep_left_decor, r1, replica_content_w, outer_rep_right_spaces, theme.sentinel_border);
                     }
+
+                    // Replica Bottom Border
+                    let r_bot_dashes = replica_box_w.saturating_sub(2);
+                    master_lines.push(Line::from(vec![
+                        Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+                        Span::styled(content_stem, Style::default().fg(theme.sentinel_border)),
+                        Span::styled("╰", Style::default().fg(theme.sentinel_border)),
+                        Span::styled("─".repeat(r_bot_dashes), Style::default().fg(theme.sentinel_border)),
+                        Span::styled("╯", Style::default().fg(theme.sentinel_border)),
+                        Span::raw(" ".repeat(outer_rep_right_spaces)),
+                        Span::styled("│", Style::default().fg(theme.sentinel_border)),
+                    ]));
                 }
             }
 
-            // Quorum Sentinels Section (Myself + Peers)
-            let peers_len = master.sentinels.len();
-            let total_watchers = peers_len + 1;
-            let watchers_summary = if peers_len == 0 {
-                "Myself Only".to_string()
-            } else if peers_len == 1 {
-                "1 Peer + Myself".to_string()
-            } else {
-                format!("{} Peers + Myself", peers_len)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                Span::styled("  Quorum Sentinels: ", Style::default().fg(theme.text_muted)),
-                Span::styled(format!("{} ({})", total_watchers, watchers_summary), Style::default().fg(theme.sentinel_peer_title).add_modifier(Modifier::BOLD)),
-            ]));
-
-            let my_info = sentinel.my_sentinel.as_ref();
-            let my_ip = my_info
-                .map(|s| s.ip.as_str())
-                .or_else(|| topology.standalone_nodes.first().and_then(|n| n.address.split(':').next()))
-                .unwrap_or("127.0.0.1");
-            let my_port = my_info
-                .map(|s| s.port)
-                .or_else(|| topology.standalone_nodes.first().and_then(|n| n.address.split(':').nth(1).and_then(|p| p.parse().ok())))
-                .unwrap_or(26379);
-            let my_ping = my_info
-                .map(|s| s.last_ok_ping_ms as f64)
-                .or_else(|| topology.standalone_nodes.first().map(|n| n.ping_ms))
-                .unwrap_or(0.4);
-
-            // [Myself] Node Row
-            let my_branch = if peers_len == 0 { "   └── " } else { "   ├── " };
-            if width >= 65 {
-                lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                    Span::styled(my_branch, Style::default().fg(theme.sentinel_border)),
-                    Span::styled(format!("[Myself] {}:{} ", my_ip, my_port), Style::default().fg(theme.sentinel_myself_title)),
-                    Span::styled("Status: [ACTIVE] ", Style::default().fg(theme.status_healthy)),
-                    Span::styled(format!("· Ping: {:.1}ms · Local Node", my_ping), Style::default().fg(theme.text_muted)),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                    Span::styled(my_branch, Style::default().fg(theme.sentinel_border)),
-                    Span::styled(format!("[Myself] {}:{}", my_ip, my_port), Style::default().fg(theme.sentinel_myself_title)),
-                ]));
-                let pad = if peers_len == 0 { "       " } else { "   │   " };
-                lines.push(Line::from(vec![
-                    Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                    Span::styled(pad, Style::default().fg(theme.sentinel_border)),
-                    Span::styled(format!("Status: [ACTIVE] · Ping: {:.1}ms · Local Node", my_ping), Style::default().fg(theme.text_muted)),
-                ]));
-            }
-
-            if peers_len == 0 {
-                // If there are no peers, [Myself] is the only node and has already used └──
-            } else {
-                for (i, peer) in master.sentinels.iter().enumerate() {
-                    let is_last = i + 1 == peers_len;
-                    let branch = if is_last { "   └── " } else { "   ├── " };
-                    let peer_color = if peer.is_healthy { theme.status_healthy } else { theme.status_critical };
-                    let peer_status = if peer.is_healthy { "[HEALTHY]" } else { "[SDOWN]" };
-
-                    if width >= 65 {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                            Span::styled(branch, Style::default().fg(theme.sentinel_border)),
-                            Span::styled(format!("[Peer #{}] {}:{} ", i + 1, peer.ip, peer.port), Style::default().fg(theme.sentinel_peer_title)),
-                            Span::styled(format!("Status: {} · Ping: {}ms", peer_status, peer.last_ok_ping_ms), Style::default().fg(peer_color)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                            Span::styled(branch, Style::default().fg(theme.sentinel_border)),
-                            Span::styled(format!("[Peer #{}] {}:{}", i + 1, peer.ip, peer.port), Style::default().fg(theme.sentinel_peer_title)),
-                        ]));
-                        let pad = if is_last { "       " } else { "   │   " };
-                        lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme.sentinel_border)),
-                            Span::styled(pad, Style::default().fg(theme.sentinel_border)),
-                            Span::styled(format!("Status: {} · Ping: {}ms", peer_status, peer.last_ok_ping_ms), Style::default().fg(peer_color)),
-                        ]));
-                    }
-                }
-            }
-
-            // Card bottom border
+            // Card Bottom Border: ╰──────────────────────────────────╯
             let bot_dash_count = box_w.saturating_sub(3);
-            lines.push(Line::from(vec![
+            master_lines.push(Line::from(vec![
                 Span::styled(" ╰", Style::default().fg(theme.sentinel_border)),
                 Span::styled("─".repeat(bot_dash_count), Style::default().fg(theme.sentinel_border)),
                 Span::styled("╯", Style::default().fg(theme.sentinel_border)),
             ]));
 
-            items.push(ListItem::new(lines));
-            items.push(ListItem::new(vec![Line::from("")])); // Spacing between multiple masters
+            items.push(ListItem::new(master_lines));
         }
+
+        // 3. Render Quorum Sentinels Card (Monitoring Layer: Parallel to Data Layer, all Sentinels are Peers)
+        let mut snt_lines = Vec::new();
+
+        let my_info = sentinel.my_sentinel.as_ref();
+        let my_ip = my_info
+            .map(|s| s.ip.as_str())
+            .or_else(|| topology.standalone_nodes.first().and_then(|n| n.address.split(':').next()))
+            .unwrap_or("127.0.0.1");
+        let my_port = my_info
+            .map(|s| s.port)
+            .or_else(|| topology.standalone_nodes.first().and_then(|n| n.address.split(':').nth(1).and_then(|p| p.parse().ok())))
+            .unwrap_or(26379);
+        let my_ping = my_info
+            .map(|s| s.last_ok_ping_ms as f64)
+            .or_else(|| topology.standalone_nodes.first().map(|n| n.ping_ms))
+            .unwrap_or(0.0);
+
+        let peers = sentinel.masters.first().map(|m| m.sentinels.as_slice()).unwrap_or(&[]);
+        let total_watchers = peers.len() + 1;
+        let quorum_needed = sentinel.masters.first().map(|m| m.quorum).unwrap_or(2);
+
+        let snt_card_title = format!(" ╭── Quorum Sentinels: {} (Quorum: {}) ", total_watchers, quorum_needed);
+        let snt_dash_count = box_w.saturating_sub(snt_card_title.chars().count() + 1);
+        snt_lines.push(Line::from(vec![
+            Span::styled(snt_card_title, Style::default().fg(theme.sentinel_border).add_modifier(Modifier::BOLD)),
+            Span::styled("─".repeat(snt_dash_count), Style::default().fg(theme.sentinel_border)),
+            Span::styled("╮", Style::default().fg(theme.sentinel_border)),
+        ]));
+
+        let snt_box_w = box_w.saturating_sub(7).max(18);
+        let outer_snt_right_spaces = box_w.saturating_sub(4 + snt_box_w + 1);
+        let snt_content_w = snt_box_w.saturating_sub(4);
+
+        // [Myself] Node Box (Local Node - Peer with other sentinels)
+        let my_title = "╭── Sentinel #1 (Local) ";
+        let my_dash_count = snt_box_w.saturating_sub(my_title.chars().count() + 1);
+
+        snt_lines.push(Line::from(vec![
+            Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+            Span::styled(my_title, Style::default().fg(theme.sentinel_border)),
+            Span::styled("─".repeat(my_dash_count), Style::default().fg(theme.sentinel_border)),
+            Span::styled("╮", Style::default().fg(theme.sentinel_border)),
+            Span::raw(" ".repeat(outer_snt_right_spaces)),
+            Span::styled("│", Style::default().fg(theme.sentinel_border)),
+        ]));
+
+        let my_row_spans = vec![
+            Span::styled(format!("[Myself] {}:{} ", my_ip, my_port), Style::default().fg(theme.sentinel_myself_title)),
+            Span::styled("Status: [ACTIVE] ", Style::default().fg(theme.status_healthy)),
+            Span::styled(format!("· Ping: {:.1}ms · Local Node", my_ping), Style::default().fg(theme.text_muted)),
+        ];
+
+        if Self::spans_width(&my_row_spans) <= snt_content_w {
+            Self::push_boxed_line_with_border(&mut snt_lines, " │  ", my_row_spans, snt_content_w, outer_snt_right_spaces, theme.sentinel_border);
+        } else {
+            let r1 = vec![
+                Span::styled(format!("[Myself] {}:{} ", my_ip, my_port), Style::default().fg(theme.sentinel_myself_title)),
+                Span::styled("Status: [ACTIVE]", Style::default().fg(theme.status_healthy)),
+            ];
+            Self::push_boxed_line_with_border(&mut snt_lines, " │  ", r1, snt_content_w, outer_snt_right_spaces, theme.sentinel_border);
+        }
+
+        let my_bot_dashes = snt_box_w.saturating_sub(2);
+        snt_lines.push(Line::from(vec![
+            Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+            Span::styled("╰", Style::default().fg(theme.sentinel_border)),
+            Span::styled("─".repeat(my_bot_dashes), Style::default().fg(theme.sentinel_border)),
+            Span::styled("╯", Style::default().fg(theme.sentinel_border)),
+            Span::raw(" ".repeat(outer_snt_right_spaces)),
+            Span::styled("│", Style::default().fg(theme.sentinel_border)),
+        ]));
+
+        // Peer Sentinels (All at the exact same indentation level - peers, not children!)
+        for (i, peer) in peers.iter().enumerate() {
+            let peer_status_str = if peer.is_healthy { "[HEALTHY]" } else { "[SDOWN]" };
+            let peer_color = if peer.is_healthy { theme.status_healthy } else { theme.status_critical };
+
+            let p_title = format!("╭── Sentinel #{} ", i + 2);
+            let p_dash_count = snt_box_w.saturating_sub(p_title.chars().count() + 1);
+
+            snt_lines.push(Line::from(vec![
+                Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+                Span::styled(p_title, Style::default().fg(theme.sentinel_border)),
+                Span::styled("─".repeat(p_dash_count), Style::default().fg(theme.sentinel_border)),
+                Span::styled("╮", Style::default().fg(theme.sentinel_border)),
+                Span::raw(" ".repeat(outer_snt_right_spaces)),
+                Span::styled("│", Style::default().fg(theme.sentinel_border)),
+            ]));
+
+            let peer_row_spans = vec![
+                Span::styled(format!("[Peer #{}] {}:{} ", i + 1, peer.ip, peer.port), Style::default().fg(theme.sentinel_peer_title)),
+                Span::styled(format!("Status: {} ", peer_status_str), Style::default().fg(peer_color)),
+                Span::styled(format!("· Ping: {}ms", peer.last_ok_ping_ms), Style::default().fg(theme.text_muted)),
+            ];
+
+            if Self::spans_width(&peer_row_spans) <= snt_content_w {
+                Self::push_boxed_line_with_border(&mut snt_lines, " │  ", peer_row_spans, snt_content_w, outer_snt_right_spaces, theme.sentinel_border);
+            } else {
+                let r1 = vec![
+                    Span::styled(format!("[Peer #{}] {}:{} ", i + 1, peer.ip, peer.port), Style::default().fg(theme.sentinel_peer_title)),
+                    Span::styled(format!("Status: {}", peer_status_str), Style::default().fg(peer_color)),
+                ];
+                Self::push_boxed_line_with_border(&mut snt_lines, " │  ", r1, snt_content_w, outer_snt_right_spaces, theme.sentinel_border);
+            }
+
+            let p_bot_dashes = snt_box_w.saturating_sub(2);
+            snt_lines.push(Line::from(vec![
+                Span::styled(" │  ", Style::default().fg(theme.sentinel_border)),
+                Span::styled("╰", Style::default().fg(theme.sentinel_border)),
+                Span::styled("─".repeat(p_bot_dashes), Style::default().fg(theme.sentinel_border)),
+                Span::styled("╯", Style::default().fg(theme.sentinel_border)),
+                Span::raw(" ".repeat(outer_snt_right_spaces)),
+                Span::styled("│", Style::default().fg(theme.sentinel_border)),
+            ]));
+        }
+
+        // Card Bottom Border: ╰──────────────────────────────────╯
+        let snt_bot_dash_count = box_w.saturating_sub(3);
+        snt_lines.push(Line::from(vec![
+            Span::styled(" ╰", Style::default().fg(theme.sentinel_border)),
+            Span::styled("─".repeat(snt_bot_dash_count), Style::default().fg(theme.sentinel_border)),
+            Span::styled("╯", Style::default().fg(theme.sentinel_border)),
+        ]));
+
+        items.push(ListItem::new(snt_lines));
     }
 }

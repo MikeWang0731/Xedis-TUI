@@ -301,3 +301,74 @@ fn test_sentinel_border_color_consistency() {
     assert!(myself_cell_found, "Expected [Myself] to be rendered and verified");
     assert!(peer_cell_found, "Expected [Peer #1] to be rendered and verified");
 }
+
+#[test]
+fn test_sentinel_dark_theme_border_is_cyan() {
+    let dark_theme = ThemePalette::dark();
+    assert_eq!(dark_theme.sentinel_border, ratatui::style::Color::Cyan, "Dark theme sentinel_border must be Cyan");
+    assert_eq!(dark_theme.sentinel_border, dark_theme.cluster_border, "Dark theme sentinel_border must match cluster_border");
+
+    let light_theme = ThemePalette::light();
+    assert_eq!(light_theme.sentinel_border, ratatui::style::Color::Rgb(2, 132, 199), "Light theme sentinel_border must be Sky-600");
+    assert_eq!(light_theme.sentinel_border, light_theme.cluster_border, "Light theme sentinel_border must match cluster_border");
+}
+
+#[test]
+fn test_sentinel_cluster_view_scrollbar_when_overflowing() {
+    let topology = ClusterTopology::mock_sentinel_topology();
+    let theme = ThemePalette::dark();
+
+    // 1. Constrained terminal height (80 cols x 20 rows, inner height = 18)
+    let backend = TestBackend::new(80, 20);
+    let mut term = Terminal::new(backend).unwrap();
+
+    term.draw(|f| {
+        ClusterView::render(f, f.area(), &topology, 0, &theme);
+    })
+    .unwrap();
+
+    let buffer = term.backend().buffer();
+    let scrollbar_col = 78; // inner.width = 78, column 78 is scrollbar, column 79 is outer border '│'
+
+    let col_chars: Vec<String> = (1..19)
+        .map(|y| buffer[(scrollbar_col, y)].symbol().to_string())
+        .collect();
+
+    // Must have up arrow at top of scrollbar
+    assert_eq!(col_chars.first().unwrap(), "↑", "Expected ↑ arrow at top of scrollbar when overflowing");
+    // Must have down arrow at bottom of scrollbar
+    assert_eq!(col_chars.last().unwrap(), "↓", "Expected ↓ arrow at bottom of scrollbar when overflowing");
+
+    // Must contain both track '│' and thumb '█'
+    assert!(col_chars.iter().any(|s| s == "█"), "Expected thumb '█' in scrollbar");
+    assert!(col_chars.iter().any(|s| s == "│"), "Expected track '│' in scrollbar");
+
+    // Thumb position at offset 0
+    let thumb_y_offset0 = (1..19).find(|y| buffer[(scrollbar_col, *y)].symbol() == "█").unwrap();
+
+    // 2. Now scroll down to offset 1 (Paging to Sentinel card)
+    term.draw(|f| {
+        ClusterView::render(f, f.area(), &topology, 1, &theme);
+    })
+    .unwrap();
+
+    let buffer_scrolled = term.backend().buffer();
+    let thumb_y_offset1 = (1..19).find(|y| buffer_scrolled[(scrollbar_col, *y)].symbol() == "█").unwrap();
+
+    // Thumb must move downwards when scrolled
+    assert!(
+        thumb_y_offset1 > thumb_y_offset0,
+        "Scrollbar thumb should move down on offset 1: {} vs {}",
+        thumb_y_offset1,
+        thumb_y_offset0
+    );
+
+    // Verify content on page 2 contains Quorum Sentinels
+    let content_scrolled = buffer_scrolled
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>();
+    assert!(content_scrolled.contains("Quorum Sentinels"));
+    assert!(content_scrolled.contains("[Myself]"));
+}
